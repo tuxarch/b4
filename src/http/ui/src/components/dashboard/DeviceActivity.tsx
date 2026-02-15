@@ -1,26 +1,20 @@
-import { useEffect, useState, useMemo } from "react";
-import {
-  Box,
-  Paper,
-  Typography,
-  Stack,
-  Chip,
-  IconButton,
-  Collapse,
-  Tooltip,
-  Menu,
-  MenuItem,
-} from "@mui/material";
-import {
-  ExpandMore as ExpandMoreIcon,
-  ExpandLess as ExpandLessIcon,
-  AddCircleOutline as AddIcon,
-  Check as CheckIcon,
-} from "@mui/icons-material";
-import { colors } from "@design";
-import { formatNumber } from "@utils";
-import { B4SetConfig } from "@models/config";
+import { useEffect, useMemo, useState } from "react";
+
+import { IconAdd, IconCheck } from "@b4.icons";
 import { setsApi } from "@b4.sets";
+import {
+  Accordion,
+  ActionIcon,
+  Badge,
+  Box,
+  Group,
+  Menu,
+  Stack,
+  Text,
+  Tooltip,
+} from "@mantine/core";
+import { B4SetConfig } from "@models/config";
+import { formatNumber } from "@utils";
 
 interface DeviceInfo {
   mac: string;
@@ -44,7 +38,6 @@ export const DeviceActivity = ({
   onRefreshSets,
 }: DeviceActivityProps) => {
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     fetch("/api/devices")
@@ -84,15 +77,6 @@ export const DeviceActivity = ({
       .sort((a, b) => b.total - a.total);
   }, [deviceDomains]);
 
-  const toggleExpand = (mac: string) => {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(mac)) next.delete(mac);
-      else next.add(mac);
-      return next;
-    });
-  };
-
   const getDeviceName = (mac: string): string => {
     const dev = deviceMap[mac];
     if (dev?.alias) return dev.alias;
@@ -114,133 +98,53 @@ export const DeviceActivity = ({
   if (sortedDevices.length === 0) return null;
 
   return (
-    <Box sx={{ mb: 1.5 }}>
-      <Typography
-        variant="caption"
-        sx={{
-          color: colors.text.secondary,
-          textTransform: "uppercase",
-          letterSpacing: "0.5px",
-          mb: 1,
-          display: "block",
-        }}
-      >
-        Device Activity
-      </Typography>
-      <Stack spacing={1}>
+    <Box>
+      <Text>Device Activity</Text>
+      <Accordion multiple variant="contained" chevronPosition="left">
         {sortedDevices.map(({ mac, domains, total, domainCount }) => {
-          const isExpanded = expanded.has(mac);
           const sortedDomains = Object.entries(domains).sort(
             (a, b) => b[1] - a[1],
           );
 
           return (
-            <Paper
-              key={mac}
-              sx={{
-                bgcolor: colors.background.paper,
-                borderColor: colors.border.default,
-                overflow: "hidden",
-              }}
-              variant="outlined"
-            >
-              {/* Collapsed header */}
-              <Box
-                sx={{
-                  px: 2,
-                  py: 1,
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  "&:hover": { bgcolor: `${colors.primary}08` },
-                }}
-                onClick={() => toggleExpand(mac)}
+            <Accordion.Item key={mac} value={mac}>
+              <Accordion.Control
+                icon={
+                  <Group>
+                    <Badge variant="light">{`${domainCount} domains`}</Badge>
+                    <Badge variant="light">{`${formatNumber(total)} conn`}</Badge>
+                  </Group>
+                }
               >
-                <Stack
-                  direction="row"
-                  spacing={1.5}
-                  alignItems="center"
-                  sx={{ minWidth: 0 }}
-                >
-                  <Typography
-                    variant="body2"
-                    sx={{
-                      color: colors.text.primary,
-                      fontWeight: 600,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {getDeviceName(mac)}
-                  </Typography>
-                  <Typography
-                    variant="caption"
-                    sx={{ color: colors.text.disabled, flexShrink: 0 }}
-                  >
-                    {getDeviceSubtitle(mac)}
-                  </Typography>
-                </Stack>
-                <Stack
-                  direction="row"
-                  spacing={1}
-                  alignItems="center"
-                  sx={{ flexShrink: 0 }}
-                >
-                  <Chip
-                    label={`${domainCount} domains`}
-                    size="small"
-                    sx={{
-                      bgcolor: `${colors.secondary}15`,
-                      color: colors.text.secondary,
-                      fontSize: "0.7rem",
-                      height: 22,
-                    }}
-                  />
-                  <Chip
-                    label={`${formatNumber(total)} conn`}
-                    size="small"
-                    sx={{
-                      bgcolor: `${colors.primary}15`,
-                      color: colors.text.secondary,
-                      fontSize: "0.7rem",
-                      height: 22,
-                    }}
-                  />
-                  {isExpanded ? (
-                    <ExpandLessIcon
-                      sx={{ color: colors.text.secondary, fontSize: 20 }}
+                <Group justify="space-between" wrap="nowrap">
+                  <Group>
+                    <Text>{getDeviceName(mac)}</Text>
+                    {getDeviceSubtitle(mac) && (
+                      <Text size="sm" c="dimmed">
+                        {getDeviceSubtitle(mac)}
+                      </Text>
+                    )}
+                  </Group>
+                </Group>
+              </Accordion.Control>
+              <Accordion.Panel>
+                <Stack gap="xs">
+                  {sortedDomains.map(([domain, count]) => (
+                    <DomainRow
+                      key={domain}
+                      domain={domain}
+                      count={count}
+                      isTargeted={isDomainTargeted(domain)}
+                      sets={sets}
+                      onAdded={onRefreshSets}
                     />
-                  ) : (
-                    <ExpandMoreIcon
-                      sx={{ color: colors.text.secondary, fontSize: 20 }}
-                    />
-                  )}
+                  ))}
                 </Stack>
-              </Box>
-
-              {/* Expanded domain list */}
-              <Collapse in={isExpanded}>
-                <Box sx={{ px: 2, pb: 1.5 }}>
-                  <Stack spacing={0.25}>
-                    {sortedDomains.map(([domain, count]) => (
-                      <DomainRow
-                        key={domain}
-                        domain={domain}
-                        count={count}
-                        isTargeted={isDomainTargeted(domain)}
-                        sets={sets}
-                        onAdded={onRefreshSets}
-                      />
-                    ))}
-                  </Stack>
-                </Box>
-              </Collapse>
-            </Paper>
+              </Accordion.Panel>
+            </Accordion.Item>
           );
         })}
-      </Stack>
+      </Accordion>
     </Box>
   );
 };
@@ -260,11 +164,9 @@ const DomainRow = ({
   sets,
   onAdded,
 }: DomainRowProps) => {
-  const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
   const [adding, setAdding] = useState(false);
 
   const handleAdd = async (setId: string) => {
-    setAnchorEl(null);
     setAdding(true);
     try {
       await setsApi.addDomainToSet(setId, domain);
@@ -276,95 +178,45 @@ const DomainRow = ({
     }
   };
 
-  return (
-    <Box
-      sx={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        py: 0.5,
-        px: 1,
-        borderRadius: 0.5,
-        "&:hover": { bgcolor: `${colors.primary}06` },
-      }}
-    >
-      <Stack
-        direction="row"
-        spacing={1}
-        alignItems="center"
-        sx={{ minWidth: 0, flex: 1 }}
-      >
-        <Typography
-          variant="caption"
-          sx={{
-            color: colors.text.primary,
-            fontSize: "0.75rem",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {domain}
-        </Typography>
-        <Typography
-          variant="caption"
-          sx={{
-            color: colors.text.disabled,
-            fontSize: "0.65rem",
-            flexShrink: 0,
-          }}
-        >
-          {formatNumber(count)}
-        </Typography>
-      </Stack>
+  const enabledSets = sets.filter((s) => s.enabled);
 
-      {isTargeted ? (
-        <Tooltip title="Already in a set">
-          <CheckIcon sx={{ color: "#4caf50", fontSize: 16, ml: 1 }} />
-        </Tooltip>
-      ) : (
-        <>
-          <Tooltip title="Add to set">
-            <IconButton
-              size="small"
-              onClick={(e) => {
-                setAnchorEl(e.currentTarget);
-              }}
-              disabled={adding}
-              sx={{ color: colors.secondary, ml: 0.5, p: 0.25 }}
-            >
-              <AddIcon sx={{ fontSize: 16 }} />
-            </IconButton>
+  return (
+    <Box>
+      <Group justify="space-between" wrap="nowrap">
+        <Group>
+          <Text>{domain}</Text>
+          <Text>{formatNumber(count)}</Text>
+        </Group>
+
+        {isTargeted ?
+          <Tooltip label="Already in a set" position="left">
+            <ActionIcon variant="subtle" disabled>
+              <IconCheck size={16} />
+            </ActionIcon>
           </Tooltip>
-          <Menu
-            anchorEl={anchorEl}
-            open={Boolean(anchorEl)}
-            onClose={() => {
-              setAnchorEl(null);
-            }}
-            slotProps={{
-              paper: {
-                sx: {
-                  bgcolor: colors.background.default,
-                  border: `1px solid ${colors.border.default}`,
-                },
-              },
-            }}
-          >
-            {sets
-              .filter((s) => s.enabled)
-              .map((set) => (
-                <MenuItem
-                  key={set.id}
-                  onClick={() => void handleAdd(set.id)}
-                  sx={{ color: colors.text.primary, fontSize: "0.8rem" }}
-                >
-                  {set.name}
-                </MenuItem>
-              ))}
-          </Menu>
-        </>
-      )}
+        : enabledSets.length > 0 && (
+            <Menu>
+              <Menu.Target>
+                <Tooltip label="Add to set" position="left">
+                  <ActionIcon variant="subtle" disabled={adding}>
+                    <IconAdd size={16} />
+                  </ActionIcon>
+                </Tooltip>
+              </Menu.Target>
+              <Menu.Dropdown>
+                {enabledSets.map((set) => (
+                  <Menu.Item
+                    key={set.id}
+                    onClick={() => void handleAdd(set.id)}
+                  >
+                    {set.name}
+                  </Menu.Item>
+                ))}
+              </Menu.Dropdown>
+            </Menu>
+          )
+        }
+      </Group>
     </Box>
   );
 };

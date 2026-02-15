@@ -1,19 +1,13 @@
-import { useEffect, useState, useRef } from "react";
-import {
-  Box,
-  Container,
-  Typography,
-  LinearProgress,
-  Paper,
-} from "@mui/material";
-import { HealthBanner } from "./HealthBanner";
-import { MetricsCards } from "./MetricsCards";
+import { useDashboardSets } from "@hooks/useDashboardSets";
+import { AreaChart } from "@mantine/charts";
+import { Box, Card, Divider, Loader, Stack, Text } from "@mantine/core";
+import { useEffect, useRef, useState } from "react";
+
 import { ActiveSets } from "./ActiveSets";
 import { DeviceActivity } from "./DeviceActivity";
+import { HealthBanner } from "./HealthBanner";
+import { MetricsCards } from "./MetricsCards";
 import { UnmatchedDomains } from "./UnmatchedDomains";
-import { SimpleLineChart } from "./SimpleLineChart";
-import { colors } from "@design";
-import { useDashboardSets } from "@hooks/useDashboardSets";
 
 export interface Metrics {
   total_connections: number;
@@ -122,47 +116,49 @@ const normalizeMetrics = (data: null | Metrics): Metrics => {
     tcp_connections: safeNumber(data.tcp_connections),
     udp_connections: safeNumber(data.udp_connections),
     targeted_connections: safeNumber(data.targeted_connections),
-    connection_rate: Array.isArray(data.connection_rate)
-      ? data.connection_rate.map(
+    connection_rate:
+      Array.isArray(data.connection_rate) ?
+        data.connection_rate.map(
           (item: { timestamp: number; value: number }) => ({
             timestamp: safeNumber(item?.timestamp),
             value: safeNumber(item?.value),
           }),
         )
       : [],
-    packet_rate: Array.isArray(data.packet_rate)
-      ? data.packet_rate.map((item: { timestamp: number; value: number }) => ({
+    packet_rate:
+      Array.isArray(data.packet_rate) ?
+        data.packet_rate.map((item: { timestamp: number; value: number }) => ({
           timestamp: safeNumber(item?.timestamp),
           value: safeNumber(item?.value),
         }))
       : [],
     top_domains:
-      data.top_domains && typeof data.top_domains === "object"
-        ? Object.fromEntries(
-            Object.entries(data.top_domains).map(([k, v]) => [
-              String(k),
-              safeNumber(v),
-            ]),
-          )
-        : {},
+      data.top_domains && typeof data.top_domains === "object" ?
+        Object.fromEntries(
+          Object.entries(data.top_domains).map(([k, v]) => [
+            String(k),
+            safeNumber(v),
+          ]),
+        )
+      : {},
     protocol_dist:
-      data.protocol_dist && typeof data.protocol_dist === "object"
-        ? Object.fromEntries(
-            Object.entries(data.protocol_dist).map(([k, v]) => [
-              String(k),
-              safeNumber(v),
-            ]),
-          )
-        : {},
+      data.protocol_dist && typeof data.protocol_dist === "object" ?
+        Object.fromEntries(
+          Object.entries(data.protocol_dist).map(([k, v]) => [
+            String(k),
+            safeNumber(v),
+          ]),
+        )
+      : {},
     geo_dist:
-      data.geo_dist && typeof data.geo_dist === "object"
-        ? Object.fromEntries(
-            Object.entries(data.geo_dist).map(([k, v]) => [
-              String(k),
-              safeNumber(v),
-            ]),
-          )
-        : {},
+      data.geo_dist && typeof data.geo_dist === "object" ?
+        Object.fromEntries(
+          Object.entries(data.geo_dist).map(([k, v]) => [
+            String(k),
+            safeNumber(v),
+          ]),
+        )
+      : {},
     start_time: String(data.start_time ?? new Date().toISOString()),
     uptime: String(data.uptime ?? "0s"),
     cpu_usage: safeNumber(data.cpu_usage),
@@ -175,8 +171,9 @@ const normalizeMetrics = (data: null | Metrics): Metrics => {
       heap_inuse: safeNumber(data?.memory_usage?.heap_inuse),
       percent: safeNumber(data?.memory_usage?.percent),
     },
-    worker_status: Array.isArray(data.worker_status)
-      ? data.worker_status.map(
+    worker_status:
+      Array.isArray(data.worker_status) ?
+        data.worker_status.map(
           (w: { id: number; status: string; processed: number }) => ({
             id: safeNumber(w.id),
             status: String(w.status ?? "unknown"),
@@ -186,8 +183,9 @@ const normalizeMetrics = (data: null | Metrics): Metrics => {
       : [],
     nfqueue_status: String(data.nfqueue_status ?? "unknown"),
     tables_status: String(data.tables_status ?? "unknown"),
-    recent_connections: Array.isArray(data.recent_connections)
-      ? data.recent_connections.map(
+    recent_connections:
+      Array.isArray(data.recent_connections) ?
+        data.recent_connections.map(
           (conn: {
             timestamp?: string;
             protocol?: "TCP" | "UDP";
@@ -198,9 +196,9 @@ const normalizeMetrics = (data: null | Metrics): Metrics => {
           }) => ({
             timestamp: String(conn?.timestamp ?? ""),
             protocol:
-              conn?.protocol === "TCP" || conn?.protocol === "UDP"
-                ? conn.protocol
-                : ("TCP" as "TCP" | "UDP"),
+              conn?.protocol === "TCP" || conn?.protocol === "UDP" ?
+                conn.protocol
+              : ("TCP" as "TCP" | "UDP"),
             domain: String(conn?.domain ?? ""),
             source: String(conn?.source ?? ""),
             destination: String(conn?.destination ?? ""),
@@ -208,8 +206,9 @@ const normalizeMetrics = (data: null | Metrics): Metrics => {
           }),
         )
       : [],
-    recent_events: Array.isArray(data.recent_events)
-      ? data.recent_events.map(
+    recent_events:
+      Array.isArray(data.recent_events) ?
+        data.recent_events.map(
           (evt: { timestamp?: string; level?: string; message?: string }) => ({
             timestamp: String(evt?.timestamp ?? ""),
             level: String(evt?.level ?? ""),
@@ -218,21 +217,21 @@ const normalizeMetrics = (data: null | Metrics): Metrics => {
         )
       : [],
     device_domains:
-      data.device_domains && typeof data.device_domains === "object"
-        ? Object.fromEntries(
-            Object.entries(data.device_domains).map(([mac, domains]) => [
-              String(mac),
-              domains && typeof domains === "object"
-                ? Object.fromEntries(
-                    Object.entries(domains).map(([d, c]) => [
-                      String(d),
-                      safeNumber(c),
-                    ]),
-                  )
-                : {},
-            ]),
-          )
-        : {},
+      data.device_domains && typeof data.device_domains === "object" ?
+        Object.fromEntries(
+          Object.entries(data.device_domains).map(([mac, domains]) => [
+            String(mac),
+            domains && typeof domains === "object" ?
+              Object.fromEntries(
+                Object.entries(domains).map(([d, c]) => [
+                  String(d),
+                  safeNumber(c),
+                ]),
+              )
+            : {},
+          ]),
+        )
+      : {},
     current_cps: safeNumber(data.current_cps),
     current_pps: safeNumber(data.current_pps),
   };
@@ -243,6 +242,7 @@ export function DashboardPage() {
   const [connected, setConnected] = useState(false);
   const [version, setVersion] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+
   const { sets, targetedDomains, refresh: refreshSets } = useDashboardSets();
 
   useEffect(() => {
@@ -269,9 +269,9 @@ export function DashboardPage() {
       ws.onmessage = (event) => {
         try {
           const data =
-            typeof event.data === "string"
-              ? (JSON.parse(event.data) as Metrics)
-              : normalizeMetrics(null);
+            typeof event.data === "string" ?
+              (JSON.parse(event.data) as Metrics)
+            : normalizeMetrics(null);
           setMetrics(normalizeMetrics(data));
         } catch {
           setMetrics(normalizeMetrics(null));
@@ -301,20 +301,18 @@ export function DashboardPage() {
 
   if (!metrics) {
     return (
-      <Container maxWidth={false} sx={{ py: 3 }}>
-        <Box sx={{ textAlign: "center", py: 8 }}>
-          <LinearProgress sx={{ mb: 2 }} />
-          <Typography>Loading dashboard...</Typography>
-        </Box>
-      </Container>
+      <Box>
+        <Loader />
+        Loading dashboard...
+      </Box>
     );
   }
 
   return (
-    <Container maxWidth={false} sx={{ p: 2 }}>
+    <Stack>
       <HealthBanner metrics={metrics} connected={connected} version={version} />
 
-      <Box sx={{ mb: 1.5 }}>
+      <Box>
         <MetricsCards metrics={metrics} />
       </Box>
 
@@ -327,6 +325,8 @@ export function DashboardPage() {
         onRefreshSets={refreshSets}
       />
 
+      <Divider />
+
       <UnmatchedDomains
         topDomains={metrics.top_domains}
         sets={sets}
@@ -335,34 +335,27 @@ export function DashboardPage() {
       />
 
       {metrics.connection_rate.length > 0 && (
-        <Paper
-          sx={{
-            p: 2,
-            mt: 1.5,
-            bgcolor: colors.background.paper,
-            borderColor: colors.border.default,
-          }}
-          variant="outlined"
-        >
-          <Typography
-            variant="caption"
-            sx={{
-              color: colors.text.secondary,
-              textTransform: "uppercase",
-              letterSpacing: "0.5px",
-              mb: 1,
-              display: "block",
-            }}
-          >
-            Connection Rate
-          </Typography>
-          <SimpleLineChart
-            data={metrics.connection_rate}
-            color={colors.primary}
-            height={120}
-          />
-        </Paper>
+        <Card>
+          <Stack>
+            <Text>Connection Rate</Text>
+            <AreaChart
+              data={metrics.connection_rate}
+              h={120}
+              series={[
+                { name: "value", label: "Connection Rate", color: "orange" },
+              ]}
+              dataKey="timestamp"
+              curveType="natural"
+              tickLine="none"
+              yAxisProps={{ orientation: "right" }}
+              withXAxis={false}
+              withGradient={false}
+              withTooltip={false}
+              withDots={false}
+            />
+          </Stack>
+        </Card>
       )}
-    </Container>
+    </Stack>
   );
 }

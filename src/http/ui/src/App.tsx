@@ -1,5 +1,12 @@
-import { NavLink as RouterNavLink, useLocation } from "react-router";
+import {
+  Navigate,
+  Route,
+  NavLink as RouterNavLink,
+  Routes,
+  useLocation,
+} from "react-router";
 
+import { DashboardPage } from "@b4.dashboard";
 import {
   IconConnections,
   IconDashboard,
@@ -20,11 +27,11 @@ import {
   Title,
 } from "@mantine/core";
 import "@mantine/core/styles.css";
+
 import { useDisclosure } from "@mantine/hooks";
 import { Notifications } from "@mantine/notifications";
 import "@mantine/notifications/styles.css";
-import { theme } from "./design/theme";
-import "./design/yanenavizhumantine.css";
+import { resolver, theme } from "./design/theme";
 
 interface NavItem {
   path: string;
@@ -50,9 +57,14 @@ export default function App() {
   const title = navItems.find((item) => item.path === location.pathname)?.label;
 
   return (
-    <MantineProvider defaultColorScheme="dark" theme={theme}>
+    <MantineProvider
+      defaultColorScheme="dark"
+      theme={theme}
+      cssVariablesResolver={resolver}
+    >
       <Notifications />
       <AppShell
+        padding="md"
         layout="alt"
         header={{ height: { base: 60, lg: 70 } }}
         navbar={{
@@ -100,20 +112,21 @@ export default function App() {
             <Version />
           </AppShell.Section>
         </AppShell.Navbar>
-      </AppShell>
-      {/*
+        <AppShell.Main>
           <Routes>
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="/dashboard" element={<DashboardPage />} />
+            {/*
             <Route path="/sets/*" element={<SetsPage />} />
             <Route path="/connections" element={<ConnectionsPage />} />
             <Route path="/discovery" element={<DiscoveryPage />} />
             <Route path="/logs" element={<LogsPage />} />
             <Route path="/settings/*" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
+            */}
           </Routes>
-
-      */}
+        </AppShell.Main>
+      </AppShell>
     </MantineProvider>
   );
 }

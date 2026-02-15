@@ -1,6 +1,4 @@
-import { B4Card } from "@common/B4Card";
-import { Box, Stack, Typography } from "@mui/material";
-import { colors, spacing, radius } from "@design";
+import { Box, Card, Group, Stack, Text, ThemeIcon, Title } from "@mantine/core";
 
 interface StatCardProps {
   title: string;
@@ -8,8 +6,6 @@ interface StatCardProps {
   subtitle?: string;
   icon: React.ReactNode;
   color?: string;
-  variant?: "default" | "outlined" | "elevated";
-  onClick?: () => void;
   trend?: {
     value: number;
     label?: string;
@@ -21,107 +17,26 @@ export const StatCard = ({
   value,
   subtitle,
   icon,
-  color = colors.primary,
-  variant = "outlined",
-  onClick,
   trend,
 }: StatCardProps) => (
-  <B4Card
-    variant={variant}
-    sx={{
-      border: `1px solid ${color}33`,
-      cursor: onClick ? "pointer" : "default",
-      transition: "all 0.2s ease",
-      width: "100%",
-      display: "flex",
-      flexDirection: "column",
-      "&:hover": onClick
-        ? {
-            borderColor: `${color}66`,
-            boxShadow: `0 0 20px ${color}22`,
-            transform: "translateY(-2px)",
-          }
-        : {
-            borderColor: `${color}66`,
-            boxShadow: `0 0 20px ${color}22`,
-          },
-    }}
-    onClick={onClick}
-  >
-    <Box sx={{ p: spacing.md, flex: 1 }}>
-      <Stack
-        direction="row"
-        justifyContent="space-between"
-        alignItems="flex-start"
-      >
-        <Box sx={{ flex: 1 }}>
-          <Typography
-            variant="caption"
-            sx={{
-              color: colors.text.secondary,
-              textTransform: "uppercase",
-              letterSpacing: "0.5px",
-            }}
-          >
-            {title}
-          </Typography>
-          <Typography
-            variant="h4"
-            sx={{
-              color: colors.text.primary,
-              fontWeight: 600,
-              mt: 0.5,
-              mb: 0.5,
-            }}
-          >
-            {value}
-          </Typography>
-          {subtitle && (
-            <Typography variant="caption" sx={{ color: colors.text.secondary }}>
-              {subtitle}
-            </Typography>
-          )}
-          {trend && (
-            <Box
-              sx={{ display: "flex", alignItems: "center", gap: 0.5, mt: 0.5 }}
-            >
-              <Typography
-                variant="caption"
-                sx={{
-                  color: trend.value > 0 ? "#4caf50" : "#f44336",
-                  fontWeight: 600,
-                }}
-              >
-                {trend.value > 0 ? "+" : ""}
-                {trend.value.toFixed(1)}%
-              </Typography>
-              {trend.label && (
-                <Typography
-                  variant="caption"
-                  sx={{ color: colors.text.secondary }}
-                >
-                  {trend.label}
-                </Typography>
-              )}
-            </Box>
-          )}
-        </Box>
-        <Box
-          sx={{
-            p: 1.5,
-            borderRadius: radius.lg,
-            bgcolor: `${color}22`,
-            color,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            minWidth: 56,
-            minHeight: 56,
-          }}
-        >
-          {icon}
-        </Box>
+  <Card>
+    <Group justify="space-between" align="start" wrap="nowrap">
+      <Stack gap={0}>
+        <Text>{title}</Text>
+        <Title component="text">{value}</Title>
+        {subtitle && <Text>{subtitle}</Text>}
+        {trend && (
+          <Box>
+            <Text c={trend.value > 0 ? "#4caf50" : "#f44336"}>
+              {trend.value > 0 ? "+" : ""}
+              {trend.value.toFixed(1)}%
+            </Text>
+            {trend.label && <Text>{trend.label}</Text>}
+          </Box>
+        )}
       </Stack>
-    </Box>
-  </B4Card>
+
+      <ThemeIcon>{icon}</ThemeIcon>
+    </Group>
+  </Card>
 );

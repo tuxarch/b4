@@ -1,19 +1,19 @@
 import { useMemo, useState } from "react";
-import {
-  Box,
-  Paper,
-  Typography,
-  Stack,
-  IconButton,
-  Tooltip,
-  Menu,
-  MenuItem,
-} from "@mui/material";
-import { AddCircleOutline as AddIcon } from "@mui/icons-material";
-import { colors } from "@design";
-import { formatNumber } from "@utils";
-import { B4SetConfig } from "@models/config";
+
+import { IconAdd } from "@b4.icons";
 import { setsApi } from "@b4.sets";
+import {
+  Accordion,
+  ActionIcon,
+  Box,
+  Group,
+  Menu,
+  Stack,
+  Text,
+  Tooltip,
+} from "@mantine/core";
+import { B4SetConfig } from "@models/config";
+import { formatNumber } from "@utils";
 
 interface UnmatchedDomainsProps {
   topDomains: Record<string, number>;
@@ -22,8 +22,12 @@ interface UnmatchedDomainsProps {
   onRefreshSets: () => void;
 }
 
-export const UnmatchedDomains = ({ topDomains, sets, targetedDomains, onRefreshSets }: UnmatchedDomainsProps) => {
-
+export const UnmatchedDomains = ({
+  topDomains,
+  sets,
+  targetedDomains,
+  onRefreshSets,
+}: UnmatchedDomainsProps) => {
   const isDomainTargeted = (domain: string): boolean => {
     if (targetedDomains.has(domain)) return true;
     const parts = domain.split(".");
@@ -44,38 +48,26 @@ export const UnmatchedDomains = ({ topDomains, sets, targetedDomains, onRefreshS
   if (unmatched.length === 0) return null;
 
   return (
-    <Paper
-      sx={{
-        p: 2,
-        bgcolor: colors.background.paper,
-        borderColor: colors.border.default,
-      }}
-      variant="outlined"
-    >
-      <Typography
-        variant="caption"
-        sx={{
-          color: colors.text.secondary,
-          textTransform: "uppercase",
-          letterSpacing: "0.5px",
-          mb: 1.5,
-          display: "block",
-        }}
-      >
-        Domains Not In Any Set
-      </Typography>
-      <Stack spacing={0.25}>
-        {unmatched.map(([domain, count]) => (
-          <UnmatchedRow
-            key={domain}
-            domain={domain}
-            count={count}
-            sets={sets}
-            onAdded={onRefreshSets}
-          />
-        ))}
-      </Stack>
-    </Paper>
+    <Accordion variant="contained" chevronPosition="left">
+      <Accordion.Item value="unmatched">
+        <Accordion.Control>
+          <Text>Domains Not In Any Set</Text>
+        </Accordion.Control>
+        <Accordion.Panel>
+          <Stack gap="xs">
+            {unmatched.map(([domain, count]) => (
+              <UnmatchedRow
+                key={domain}
+                domain={domain}
+                count={count}
+                sets={sets}
+                onAdded={onRefreshSets}
+              />
+            ))}
+          </Stack>
+        </Accordion.Panel>
+      </Accordion.Item>
+    </Accordion>
   );
 };
 
@@ -87,11 +79,9 @@ interface UnmatchedRowProps {
 }
 
 const UnmatchedRow = ({ domain, count, sets, onAdded }: UnmatchedRowProps) => {
-  const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
   const [adding, setAdding] = useState(false);
 
   const handleAdd = async (setId: string) => {
-    setAnchorEl(null);
     setAdding(true);
     try {
       await setsApi.addDomainToSet(setId, domain);
@@ -104,73 +94,32 @@ const UnmatchedRow = ({ domain, count, sets, onAdded }: UnmatchedRowProps) => {
   };
 
   return (
-    <Box
-      sx={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        py: 0.5,
-        px: 1,
-        borderRadius: 0.5,
-        "&:hover": { bgcolor: `${colors.primary}06` },
-      }}
-    >
-      <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0, flex: 1 }}>
-        <Typography
-          variant="caption"
-          sx={{
-            color: colors.text.primary,
-            fontSize: "0.75rem",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {domain}
-        </Typography>
-        <Typography
-          variant="caption"
-          sx={{ color: colors.text.disabled, fontSize: "0.65rem", flexShrink: 0 }}
-        >
-          {formatNumber(count)}
-        </Typography>
-      </Stack>
+    <Box>
+      <Group justify="space-between" wrap="nowrap">
+        <Group>
+          <Text>{domain}</Text>
+          <Text>{formatNumber(count)}</Text>
+        </Group>
 
-      <Tooltip title="Add to set">
-        <IconButton
-          size="small"
-          onClick={(e) => { setAnchorEl(e.currentTarget); }}
-          disabled={adding}
-          sx={{ color: colors.secondary, ml: 0.5, p: 0.25 }}
-        >
-          <AddIcon sx={{ fontSize: 16 }} />
-        </IconButton>
-      </Tooltip>
-      <Menu
-        anchorEl={anchorEl}
-        open={Boolean(anchorEl)}
-        onClose={() => { setAnchorEl(null); }}
-        slotProps={{
-          paper: {
-            sx: {
-              bgcolor: colors.background.default,
-              border: `1px solid ${colors.border.default}`,
-            },
-          },
-        }}
-      >
-        {sets
-          .filter((s) => s.enabled)
-          .map((set) => (
-            <MenuItem
-              key={set.id}
-              onClick={() => void handleAdd(set.id)}
-              sx={{ color: colors.text.primary, fontSize: "0.8rem" }}
-            >
-              {set.name}
-            </MenuItem>
-          ))}
-      </Menu>
+        <Menu>
+          <Menu.Target>
+            <Tooltip label="Add to set" position="left">
+              <ActionIcon variant="subtle" disabled={adding}>
+                <IconAdd size={16} />
+              </ActionIcon>
+            </Tooltip>
+          </Menu.Target>
+          <Menu.Dropdown>
+            {sets
+              .filter((s) => s.enabled)
+              .map((set) => (
+                <Menu.Item key={set.id} onClick={() => void handleAdd(set.id)}>
+                  {set.name}
+                </Menu.Item>
+              ))}
+          </Menu.Dropdown>
+        </Menu>
+      </Group>
     </Box>
   );
 };
