@@ -1,13 +1,12 @@
-import { useState } from "react";
-import { Box, Link, Stack, Divider } from "@mui/material";
-import { colors } from "@design";
+import { IconGitHub } from "@b4.icons";
+import { dismissVersion, useGitHubRelease } from "@hooks/useGitHubRelease";
+import { Button, Stack } from "@mantine/core";
+import { useDisclosure } from "@mantine/hooks";
+import { Link } from "react-router";
 import { VersionBadge } from "./Badge";
-import { UpdateModal } from "./UpdateDialog";
-import { useGitHubRelease, dismissVersion } from "@hooks/useGitHubRelease";
-import { GitHubIcon } from "@b4.icons";
-
+import { UpdateModal } from "./UpdateModal";
 export default function Version() {
-  const [updateModalOpen, setUpdateModalOpen] = useState(false);
+  const [opened, { open, close }] = useDisclosure(false);
   const {
     releases,
     latestRelease,
@@ -18,56 +17,40 @@ export default function Version() {
     setIncludePrerelease,
   } = useGitHubRelease();
 
-  const handleVersionClick = () => {
-    setUpdateModalOpen(true);
-  };
-
   const handleDismissUpdate = () => {
     if (latestRelease) {
       dismissVersion(latestRelease.tag_name);
     }
-    setUpdateModalOpen(false);
+    close();
   };
 
   return (
-    <>
-      <Box sx={{ py: 2 }}>
-        <Divider sx={{ mb: 2, borderColor: colors.border.default }} />
-        <Stack spacing={1.5} alignItems="center">
-          <Link
-            href="https://github.com/daniellavrushin/b4"
-            target="_blank"
-            rel="noopener noreferrer"
-            sx={{
-              display: "flex",
-              alignItems: "center",
-              gap: 0.5,
-              color: colors.text.secondary,
-              textDecoration: "none",
-              "&:hover": { color: colors.secondary },
-            }}
-          >
-            <GitHubIcon sx={{ fontSize: "1rem" }} />
-            <span style={{ fontSize: "0.75rem" }}>DanielLavrushin/b4</span>
-          </Link>
-          <VersionBadge
-            version={currentVersion}
-            hasUpdate={isNewVersionAvailable}
-            isLoading={isLoading}
-            onClick={handleVersionClick}
-          />
-        </Stack>
-      </Box>
+    <Stack align="center">
+      <Button
+        component={Link}
+        variant="subtle"
+        leftSection={<IconGitHub />}
+        to="https://github.com/daniellavrushin/b4"
+        target="_blank"
+      >
+        DanielLavrushin/b4
+      </Button>
+      <VersionBadge
+        version={currentVersion}
+        hasUpdate={isNewVersionAvailable}
+        isLoading={isLoading}
+        onClick={open}
+      />
 
       <UpdateModal
-        open={updateModalOpen}
-        onClose={() => setUpdateModalOpen(false)}
+        open={opened}
+        onClose={close}
         onDismiss={handleDismissUpdate}
         currentVersion={currentVersion}
         releases={releases}
         includePrerelease={includePrerelease}
         onTogglePrerelease={setIncludePrerelease}
       />
-    </>
+    </Stack>
   );
 }

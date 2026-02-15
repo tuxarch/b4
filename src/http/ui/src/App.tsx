@@ -1,9 +1,19 @@
 import { NavLink as RouterNavLink, useLocation } from "react-router";
 
 import {
+  IconConnections,
+  IconDashboard,
+  IconDiscovery,
+  IconLogs,
+  IconSets,
+  IconSettings,
+} from "@b4.icons";
+import Version from "@components/version/Version";
+import {
   AppShell,
   Box,
   Burger,
+  Divider,
   Group,
   MantineProvider,
   NavLink,
@@ -13,6 +23,8 @@ import "@mantine/core/styles.css";
 import { useDisclosure } from "@mantine/hooks";
 import { Notifications } from "@mantine/notifications";
 import "@mantine/notifications/styles.css";
+import { theme } from "./design/theme";
+import "./design/yanenavizhumantine.css";
 
 interface NavItem {
   path: string;
@@ -21,12 +33,12 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  { path: "/dashboard", label: "Dashboard", icon: <></> },
-  { path: "/sets", label: "Sets", icon: <></> },
-  { path: "/discovery", label: "Discovery", icon: <></> },
-  { path: "/connections", label: "Connections", icon: <></> },
-  { path: "/logs", label: "Logs", icon: <></> },
-  { path: "/settings", label: "Settings", icon: <></> },
+  { path: "/dashboard", label: "Dashboard", icon: <IconDashboard /> },
+  { path: "/sets", label: "Sets", icon: <IconSets /> },
+  { path: "/discovery", label: "Discovery", icon: <IconDiscovery /> },
+  { path: "/connections", label: "Connections", icon: <IconConnections /> },
+  { path: "/logs", label: "Logs", icon: <IconLogs /> },
+  { path: "/settings", label: "Settings", icon: <IconSettings /> },
 ];
 
 export default function App() {
@@ -38,7 +50,7 @@ export default function App() {
   const title = navItems.find((item) => item.path === location.pathname)?.label;
 
   return (
-    <MantineProvider defaultColorScheme="dark">
+    <MantineProvider defaultColorScheme="dark" theme={theme}>
       <Notifications />
       <AppShell
         layout="alt"
@@ -69,6 +81,7 @@ export default function App() {
 
         <AppShell.Navbar p="md">
           <AppShell.Section p="md">{/*<Logo />*/}</AppShell.Section>
+          <Divider />
           <AppShell.Section grow p="md">
             <Box>
               {navItems.map((item) => (
@@ -82,7 +95,10 @@ export default function App() {
               ))}
             </Box>
           </AppShell.Section>
-          <AppShell.Section>{/*<Version />*/}</AppShell.Section>
+          <Divider />
+          <AppShell.Section p="md">
+            <Version />
+          </AppShell.Section>
         </AppShell.Navbar>
       </AppShell>
       {/*

@@ -1,6 +1,4 @@
-import { Box, Chip, CircularProgress, Tooltip } from "@mui/material";
-import { colors } from "@design";
-import { NewReleaseIcon } from "@b4.icons";
+import { Badge, Box, Text, Tooltip } from "@mantine/core";
 
 interface VersionBadgeProps {
   version: string;
@@ -17,61 +15,22 @@ export const VersionBadge = ({
 }: VersionBadgeProps) => {
   if (isLoading) {
     return (
-      <Box sx={{ display: "flex", alignItems: "center", gap: 1, px: 2 }}>
-        <CircularProgress size={12} sx={{ color: colors.secondary }} />
-        <span style={{ color: colors.text.secondary, fontSize: "0.75rem" }}>
-          Checking for updates...
-        </span>
+      <Box>
+        <Text>Checking for updates...</Text>
       </Box>
     );
   }
 
   return (
-    <Box
-      sx={{
-        display: "flex",
-        alignItems: "center",
-        gap: 1,
-        px: 2,
-        cursor: "pointer",
-      }}
-      onClick={onClick}
-    >
-      {hasUpdate ? (
-        <Tooltip title="New version available! Click to view details">
-          <Chip
-            label={`v${version}`}
-            size="small"
-            icon={<NewReleaseIcon />}
-            sx={{
-              bgcolor: colors.accent.secondary,
-              color: colors.secondary,
-              fontWeight: 600,
-              animation: "pulse 2s ease-in-out infinite",
-              "@keyframes pulse": {
-                "0%, 100%": {
-                  opacity: 1,
-                },
-                "50%": {
-                  opacity: 0.7,
-                },
-              },
-              "& .MuiChip-icon": {
-                color: colors.secondary,
-              },
-              "&:hover": {
-                bgcolor: colors.accent.secondaryHover,
-                transform: "scale(1.05)",
-              },
-              transition: "all 0.2s ease",
-            }}
-          />
+    <Box onClick={onClick}>
+      {hasUpdate ?
+        <Tooltip
+          position="right"
+          label="New version available! Click to view details"
+        >
+          <Badge>{`v${version}`}</Badge>
         </Tooltip>
-      ) : (
-        <span style={{ color: colors.secondary, fontSize: "0.75rem" }}>
-          v{version}
-        </span>
-      )}
+      : <Text>{`v${version}`}</Text>}
     </Box>
   );
 };
