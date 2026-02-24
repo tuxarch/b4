@@ -110,12 +110,14 @@ export const HealthBanner = ({
         </Tooltip>
 
         <Modal opened={opened} onClose={close} title="Restart b4">
-          <Button onClick={() => void handleRestart()}>Restart</Button>
-
           <Text>
             Are you sure you want to restart b4? Active connections will be
             interrupted.
           </Text>
+
+          <Button mt="lg" fullWidth onClick={() => void handleRestart()}>
+            Restart
+          </Button>
         </Modal>
       </Group>
     </Card>
