@@ -1,7 +1,4 @@
-import { Box, Stack, TextField } from "@mui/material";
 import { ClearIcon } from "@b4.icons";
-import { B4Badge, B4Switch, B4TooltipButton } from "@b4.elements";
-import { colors } from "@design";
 
 interface DomainsControlBarProps {
   filter: string;
@@ -31,31 +28,13 @@ export const DomainsControlBar = ({
   onReset,
 }: DomainsControlBarProps) => {
   return (
-    <Box
-      sx={{
-        p: 2,
-        borderBottom: "1px solid",
-        borderColor: colors.border.light,
-        bgcolor: colors.background.control,
-      }}
-    >
+    <Box>
       <Stack direction="row" spacing={2} alignItems="center">
         <TextField
           size="small"
           placeholder="Filter (combine with +, exclude with !, e.g. tcp+!domain:google.com)"
           value={filter}
           onChange={(e) => onFilterChange(e.target.value)}
-          sx={{ flex: 1 }}
-          slotProps={{
-            input: {
-              sx: {
-                bgcolor: colors.background.dark,
-                "& fieldset": {
-                  borderColor: `${colors.border.default} !important`,
-                },
-              },
-            },
-          }}
         />
         <Stack direction="row" spacing={1} alignItems="center">
           <B4Badge label={`${totalCount} connections`} />

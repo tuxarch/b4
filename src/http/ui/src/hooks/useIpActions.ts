@@ -1,90 +1,34 @@
-import { useState, useCallback } from "react";
-import { useSnackbar } from "@context/SnackbarProvider";
+import { notifications } from "@mantine/notifications";
+import { useCallback } from "react";
 
-interface IpModalState {
-  open: boolean;
-  ip: string;
-  variants: string[];
-  selected: string | string[];
-}
-
-export function useIpActions() {
-  const { showSuccess, showError } = useSnackbar();
-  const [modalState, setModalState] = useState<IpModalState>({
-    open: false,
-    ip: "",
-    variants: [],
-    selected: "",
-  });
-
-  const openModal = useCallback((ip: string, variants: string[]) => {
-    ip = ip.split(":")[0]; // Remove port if present
-
-    setModalState({
-      open: true,
-      ip,
-      variants,
-      selected: variants[0] || ip,
-    });
-  }, []);
-
-  const closeModal = useCallback(() => {
-    setModalState({
-      open: false,
-      ip: "",
-      variants: [],
-      selected: [] as string[],
-    });
-  }, []);
-
-  const selectVariant = useCallback((variant: string | string[]) => {
-    setModalState((prev) => ({ ...prev, selected: variant }));
-  }, []);
-
+export function useAddIp() {
   const addIp = useCallback(
-    async (setId: string, setName?: string) => {
-      if (!modalState.selected) return;
-
+    async (entries: string[], setId: string, setName?: string) => {
+      if (!entries.length) return;
       try {
-        const response = await fetch("/api/geoip", {
+        const res = await fetch("/api/geoip", {
           method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            cidr: Array.isArray(modalState.selected)
-              ? modalState.selected
-              : [modalState.selected],
+            cidr: entries,
             set_id: setId,
             set_name: setName,
           }),
         });
-
-        if (response.ok) {
-          showSuccess(
-            `${
-              Array.isArray(modalState.selected)
-                ? modalState.selected.length + " entries"
-                : modalState.selected
-            } added successfully`
-          );
-          closeModal();
+        if (res.ok) {
+          notifications.show({
+            title: "Success",
+            message: entries.length > 1 ? `${entries.length} entries added` : `${entries[0]} added`,
+          });
         } else {
-          const error = (await response.json()) as { message: string };
-          showError(`Failed to add ip: ${error.message}`);
+          const { message } = (await res.json()) as { message: string };
+          notifications.show({ title: "Error", message: `Failed: ${message}` });
         }
-      } catch (error) {
-        showError(`Failed to add ip: ${String(error)}`);
+      } catch (e) {
+        notifications.show({ title: "Error", message: String(e) });
       }
     },
-    [modalState.selected, closeModal, showError, showSuccess]
+    [],
   );
-
-  return {
-    modalState,
-    openModal,
-    closeModal,
-    selectVariant,
-    addIp,
-  };
+  return { addIp };
 }

@@ -1,9 +1,12 @@
 import "@fontsource-variable/jetbrains-mono";
 import {
   Accordion,
+  AppShell,
   Badge,
   CSSVariablesResolver,
   Card,
+  NavLink,
+  Table,
   ThemeIcon,
   Tooltip,
   createTheme,
@@ -22,6 +25,17 @@ export const theme = createTheme({
   primaryColor: "orange",
   defaultRadius: 0,
   components: {
+    AppShell: AppShell.extend({
+      defaultProps: {
+        c: "white",
+      },
+    }),
+    NavLink: NavLink.extend({
+      defaultProps: {
+        variant: "filled",
+        autoContrast: true,
+      },
+    }),
     Card: Card.extend({
       defaultProps: {
         withBorder: true,
@@ -51,6 +65,12 @@ export const theme = createTheme({
             backgroundColor: "#1c1917",
           },
         },
+      },
+    }),
+    Table: Table.extend({
+      defaultProps: {
+        c: "white",
+        bg: "#1c1917",
       },
     }),
   },

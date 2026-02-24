@@ -1,401 +1,184 @@
 import { useCallback, useEffect, useState } from "react";
-import {
-  Button,
-  Typography,
-  List,
-  ListItem,
-  ListItemButton,
-  ListItemText,
-  ListItemIcon,
-  Radio,
-  Box,
-  Stack,
-} from "@mui/material";
-import { AddIcon, DomainIcon } from "@b4.icons";
-import { colors } from "@design";
-import { B4SetConfig, MAIN_SET_ID } from "@models/config";
-import { SetSelector } from "@common/SetSelector";
-import { asnStorage } from "@utils";
+
 import { clearAsnLookupCache } from "@hooks/useDomainActions";
-import { B4Alert, B4Badge, B4Dialog } from "@b4.elements";
-
-interface IpInfo {
-  ip: string;
-  hostname?: string;
-  org?: string;
-  city?: string;
-  region?: string;
-  country?: string;
-}
-
-interface RipeNetworkInfo {
-  asns: string[];
-  prefix: string;
-}
+import {
+  Badge,
+  Button,
+  Group,
+  Modal,
+  Radio,
+  ScrollArea,
+  Select,
+  Stack,
+  Text,
+} from "@mantine/core";
+import { B4SetConfig, MAIN_SET_ID } from "@models/config";
+import { asnStorage } from "@utils";
 
 interface AddIpModalProps {
-  open: boolean;
+  opened: boolean;
+  onClose: () => void;
   ip: string;
   variants: string[];
   sets: B4SetConfig[];
-  selected: string;
-  ipInfoToken?: string;
-  onClose: () => void;
-  onSelectVariant: (variant: string | string[]) => void;
-  onAdd: (setId: string, setName?: string) => void;
+  onAdd: (entries: string[], setId: string, setName?: string) => void;
   onAddHostname?: (hostname: string) => void;
 }
 
 export const AddIpModal = ({
-  open,
-  ip,
-  sets,
-  variants: initialVariants,
-  selected,
-  ipInfoToken,
+  opened,
   onClose,
-  onSelectVariant,
+  ip,
+  variants,
+  sets,
   onAdd,
   onAddHostname,
 }: AddIpModalProps) => {
-  const [selectedSetId, setSelectedSetId] = useState<string>("");
-  const [ipInfo, setIpInfo] = useState<IpInfo | null>(null);
-  const [loadingInfo, setLoadingInfo] = useState(false);
-  const [loadingPrefixes, setLoadingPrefixes] = useState(false);
-  const [variants, setVariants] = useState<string[]>(initialVariants);
-  const [asn, setAsn] = useState<string>("");
+  const [selectedSetId, setSelectedSetId] = useState("");
+  const [selectedVariant, setSelectedVariant] = useState("");
   const [prefixes, setPrefixes] = useState<string[]>([]);
   const [addMode, setAddMode] = useState<"single" | "all">("single");
-  const [newSetName, setNewSetName] = useState<string>("");
+  const [ipInfo, setIpInfo] = useState<{
+    hostname?: string;
+    org?: string;
+  } | null>(null);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (open) {
-      setIpInfo(null);
-      setAsn("");
+    if (opened) {
+      setSelectedVariant(variants[0] || ip);
       setPrefixes([]);
-      setAddMode("single");
-      setLoadingInfo(false);
-      setLoadingPrefixes(false);
-      setNewSetName("");
-      setVariants(initialVariants);
-      if (sets.length > 0) {
-        setSelectedSetId(MAIN_SET_ID);
-      }
-    }
-  }, [open, sets, initialVariants, ip]);
-
-  useEffect(() => {
-    if (!open) {
       setIpInfo(null);
-      setAsn("");
-      setPrefixes([]);
-      setVariants(initialVariants);
       setAddMode("single");
-      setLoadingInfo(false);
-      setLoadingPrefixes(false);
-      setNewSetName("");
-      onSelectVariant(initialVariants[0] || "");
+      setSelectedSetId(sets[0]?.id ?? MAIN_SET_ID);
     }
-  }, [open, initialVariants, onSelectVariant]);
+  }, [opened, ip, variants, sets]);
 
-  const loadIpInfo = async () => {
-    setLoadingInfo(true);
+  const loadRipe = useCallback(async () => {
+    const cleanIp = ip.split(":")[0].replaceAll(/[[\]]/g, "");
+    setLoading(true);
     try {
-      const cleanIp = ip.split(":")[0].replaceAll(/[[\]]/g, "");
-      const response = await fetch(
-        `/api/integration/ipinfo?ip=${encodeURIComponent(cleanIp)}`
-      );
-      if (response.ok) {
-        const data = (await response.json()) as IpInfo;
-        setIpInfo(data);
-
-        // Extract ASN from org field (e.g., "AS13335 Cloudflare, Inc.")
-        if (data.org) {
-          const asnMatch = /AS(\d+)/.exec(data.org);
-          if (asnMatch) {
-            setAsn(asnMatch[1]);
+      const [netRes, asnRes] = await Promise.all([
+        fetch(`/api/integration/ripestat?ip=${encodeURIComponent(cleanIp)}`),
+        fetch(
+          `/api/integration/ipinfo?ip=${encodeURIComponent(cleanIp)}`,
+        ).catch(() => null),
+      ]);
+      if (netRes.ok) {
+        const { data } = (await netRes.json()) as { data: { asns?: string[] } };
+        const asn = data?.asns?.[0];
+        if (asn) {
+          const prefixRes = await fetch(
+            `/api/integration/ripestat/asn?asn=${encodeURIComponent(asn)}`,
+          );
+          if (prefixRes.ok) {
+            const { data: p } = (await prefixRes.json()) as {
+              data: { prefixes: { prefix: string }[] };
+            };
+            const loaded = p.prefixes.map((x) => x.prefix);
+            setPrefixes(loaded);
+            setAddMode("all");
+            asnStorage.addAsn(asn, `AS${asn}`, loaded);
+            clearAsnLookupCache();
           }
         }
       }
-    } catch (error) {
-      console.error("Failed to load IP info:", error);
-    } finally {
-      setLoadingInfo(false);
-    }
-  };
-
-  const loadRipeNetworkInfo = async () => {
-    setLoadingInfo(true);
-    try {
-      const cleanIp = ip.split(":")[0].replaceAll(/[[\]]/g, "");
-      const response = await fetch(
-        `/api/integration/ripestat?ip=${encodeURIComponent(cleanIp)}`
-      );
-      if (response.ok) {
-        const data = (await response.json()) as { data: RipeNetworkInfo };
-        const networkData = data.data;
-        if (networkData.asns && networkData.asns.length > 0) {
-          setAsn(networkData.asns[0]);
-          setIpInfo({
-            ip: cleanIp,
-            org: `AS${networkData.asns[0]}`,
-          });
-        }
-      }
-    } catch (error) {
-      console.error("Failed to load RIPE network info:", error);
-    } finally {
-      setLoadingInfo(false);
-    }
-  };
-
-  const loadRipePrefixes = useCallback(async () => {
-    if (!asn) return;
-
-    setLoadingPrefixes(true);
-    try {
-      const response = await fetch(
-        `/api/integration/ripestat/asn?asn=${encodeURIComponent(asn)}`
-      );
-      if (response.ok) {
-        const data = (await response.json()) as {
-          data: { prefixes: Array<{ prefix: string }> };
+      if (asnRes?.ok) {
+        const info = (await asnRes.json()) as {
+          hostname?: string;
+          org?: string;
         };
-        const loadedPrefixes = data.data.prefixes.map((p) => p.prefix);
-        setPrefixes(loadedPrefixes);
-        setAddMode("all");
-        onSelectVariant(loadedPrefixes);
-        asnStorage.addAsn(asn, ipInfo?.org || `AS${asn}`, loadedPrefixes);
-        clearAsnLookupCache();
+        if (info.hostname || info.org) setIpInfo(info);
       }
-    } catch (error) {
-      console.error("Failed to load RIPE prefixes:", error);
     } finally {
-      setLoadingPrefixes(false);
+      setLoading(false);
     }
-  }, [asn, ipInfo?.org, onSelectVariant]);
+  }, [ip]);
 
-  const handleAdd = () => {
-    onAdd(selectedSetId, newSetName);
-  };
-
-  useEffect(() => {
-    if (asn && open) {
-      void loadRipePrefixes();
-    }
-  }, [asn, loadRipePrefixes, open]);
-
-  const handleAddHostname = () => {
-    if (ipInfo?.hostname && onAddHostname) {
-      onAddHostname(ipInfo.hostname);
-      onClose();
-    }
+  const entries =
+    prefixes.length && addMode === "all" ?
+      prefixes
+    : [selectedVariant || variants[0] || ip];
+  const handleAdd = async () => {
+    await onAdd(entries, selectedSetId);
+    onClose();
   };
 
   return (
-    <B4Dialog
-      title="Add IP/CIDR to Manual List"
-      icon={<DomainIcon />}
-      open={open}
+    <Modal
+      opened={opened}
       onClose={onClose}
-      maxWidth="md"
-      actions={
-        <>
-          <Button onClick={onClose}>Cancel</Button>
-          <Box sx={{ flex: 1 }} />
-          <Button
-            onClick={handleAdd}
-            variant="contained"
-            startIcon={<AddIcon />}
-            disabled={!selected && prefixes.length === 0}
-          >
-            {addMode === "all" && prefixes.length > 0
-              ? `Add All ${prefixes.length} Prefixes`
-              : "Add IP/CIDR"}
-          </Button>
-        </>
-      }
+      title="Add IP/CIDR"
+      centered
+      size="md"
     >
-      <>
-        <B4Alert severity="info" sx={{ mb: 2 }}>
-          Select the desired IP or CIDR range. You can enrich with network
-          information to load all ASN prefixes.
-        </B4Alert>
+      <Stack>
+        <Group justify="space-between">
+          <Text size="sm">
+            IP: <Badge variant="light">{ip}</Badge>
+          </Text>
+          <Button
+            variant="light"
+            size="xs"
+            onClick={() => void loadRipe()}
+            loading={loading}
+          >
+            Load Network Info
+          </Button>
+        </Group>
 
-        <Box sx={{ mb: 3 }}>
-          {ipInfo ? (
-            <>
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                Original IP: <B4Badge label={ip} color="secondary" />
-              </Typography>
-              <Box
-                sx={{
-                  p: 2,
-                  bgcolor: colors.background.dark,
-                  borderRadius: 1,
-                  border: `1px solid ${colors.border.default}`,
-                }}
-              >
-                <Stack direction="row" spacing={2} alignItems="center">
-                  <Box sx={{ flex: 1 }}>
-                    {ipInfo.org && (
-                      <Typography variant="body2" color="text.primary">
-                        <strong>Org:</strong> {ipInfo.org}
-                      </Typography>
-                    )}
-                    {ipInfo.hostname && (
-                      <Typography variant="body2" color="text.secondary">
-                        <strong>Hostname:</strong> {ipInfo.hostname}
-                      </Typography>
-                    )}
-                    {(ipInfo.city || ipInfo.region || ipInfo.country) && (
-                      <Typography variant="body2" color="text.secondary">
-                        <strong>Location:</strong>{" "}
-                        {[ipInfo.city, ipInfo.region, ipInfo.country]
-                          .filter(Boolean)
-                          .join(", ")}
-                      </Typography>
-                    )}
-                    {asn && loadingPrefixes && (
-                      <Typography
-                        variant="body2"
-                        color={colors.secondary}
-                        sx={{ mt: 1 }}
-                      >
-                        Loading AS{asn} prefixes...
-                      </Typography>
-                    )}
-                  </Box>
-                  {ipInfo.hostname && onAddHostname && (
-                    <Button size="small" onClick={handleAddHostname}>
-                      Add Hostname
-                    </Button>
-                  )}
-                </Stack>
-              </Box>
-            </>
-          ) : (
-            <Stack direction="row" spacing={2} alignItems="center">
-              <Typography variant="body2" color="text.secondary">
-                Original IP: <B4Badge label={ip} color="primary" />
-              </Typography>
-              <Box sx={{ flex: 1 }} />
-              {ipInfoToken && (
-                <Button
-                  variant="outlined"
-                  size="small"
-                  onClick={() => void loadIpInfo()}
-                  disabled={loadingInfo}
-                >
-                  {loadingInfo ? "Loading..." : "Enrich with IPInfo"}
-                </Button>
-              )}
-              <Button
-                variant="outlined"
-                size="small"
-                onClick={() => void loadRipeNetworkInfo()}
-                disabled={loadingInfo}
-              >
-                {loadingInfo ? "Loading..." : "Load Network Info"}
-              </Button>
-            </Stack>
-          )}
-        </Box>
+        {ipInfo?.hostname && onAddHostname && (
+          <Button
+            variant="subtle"
+            size="xs"
+            onClick={() => {
+              onAddHostname(ipInfo.hostname!);
+              onClose();
+            }}
+          >
+            Add as domain: {ipInfo.hostname}
+          </Button>
+        )}
 
         {sets.length > 0 && (
-          <SetSelector
-            sets={sets}
+          <Select
+            label="Add to set"
+            data={sets.map((s) => ({ label: s.name, value: s.id }))}
             value={selectedSetId}
-            onChange={(setId, name) => {
-              setSelectedSetId(setId);
-              if (name) setNewSetName(name);
-            }}
+            onChange={(v) => v && setSelectedSetId(v)}
           />
         )}
 
-        {prefixes.length > 0 ? (
-          <>
-            <Typography
-              variant="body2"
-              color="text.secondary"
-              sx={{ mb: 1, mt: 2 }}
-            >
-              Loaded {prefixes.length} prefixes from AS{asn}
-            </Typography>
-            <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
-              <B4Badge
-                label={`Add ${ip} only`}
-                onClick={() => {
-                  setAddMode("single");
-                  onSelectVariant(initialVariants[0]);
-                }}
-                color="secondary"
-                variant="outlined"
-              />
-              <B4Badge
-                label={`Add all ${prefixes.length} prefixes`}
-                onClick={() => {
-                  setAddMode("all");
-                  onSelectVariant(prefixes);
-                }}
-                variant="outlined"
-                color="primary"
-              />
+        {prefixes.length > 0 ?
+          <Radio.Group
+            label="Add"
+            value={addMode}
+            onChange={(v) => setAddMode(v as "single" | "all")}
+          >
+            <Stack gap="xs">
+              <Radio value="single" label={`${ip} only`} />
+              <Radio value="all" label={`All ${prefixes.length} prefixes`} />
             </Stack>
-          </>
-        ) : (
-          <>
-            <Typography
-              variant="body2"
-              color="text.secondary"
-              sx={{ mb: 1, mt: 2 }}
-            >
-              CIDR variants:
-            </Typography>
-            <List sx={{ maxHeight: 400, overflow: "auto" }}>
-              {variants.map((variant) => (
-                <ListItem key={variant} disablePadding>
-                  <ListItemButton
-                    onClick={() => onSelectVariant(variant)}
-                    selected={selected === variant}
-                    sx={{
-                      borderRadius: 1,
-                      mb: 0.5,
-                      "&.Mui-selected": {
-                        bgcolor: colors.accent.primary,
-                        "&:hover": { bgcolor: colors.accent.primaryHover },
-                      },
-                    }}
-                  >
-                    <ListItemIcon>
-                      <Radio
-                        checked={selected === variant}
-                        sx={{
-                          color: colors.border.default,
-                          "&.Mui-checked": { color: colors.primary },
-                        }}
-                      />
-                    </ListItemIcon>
-                    <ListItemText
-                      primary={variant}
-                      secondary={(() => {
-                        const [, cidr] = variant.split("/");
-                        if (cidr === "32" || cidr === "128") return "Single IP";
-                        if (cidr === "24") return "~256 IPs - local subnet";
-                        if (cidr === "16") return "~65K IPs - network block";
-                        if (cidr === "8") return "~16M IPs - class A";
-                        if (cidr === "64") return "IPv6 subnet";
-                        if (cidr === "48") return "IPv6 site";
-                        return "IPv6 ISP range";
-                      })()}
-                    />
-                  </ListItemButton>
-                </ListItem>
-              ))}
-            </List>
-          </>
-        )}
-      </>
-    </B4Dialog>
+          </Radio.Group>
+        : <Radio.Group
+            label="CIDR variant"
+            value={selectedVariant}
+            onChange={setSelectedVariant}
+          >
+            <ScrollArea h={200}>
+              <Stack gap="xs">
+                {variants.map((v) => (
+                  <Radio key={v} value={v} label={v} />
+                ))}
+              </Stack>
+            </ScrollArea>
+          </Radio.Group>
+        }
+
+        <Group justify="flex-end" mt="md">
+          <Button onClick={handleAdd}>Add</Button>
+        </Group>
+      </Stack>
+    </Modal>
   );
 };

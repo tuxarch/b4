@@ -1,23 +1,13 @@
-import { useRef, useState, useEffect, useCallback, useMemo, memo } from "react";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Typography,
-  Stack,
-  Box,
-  Tooltip,
-} from "@mui/material";
-import { AddIcon } from "@b4.icons";
-import { SortableTableCell, SortDirection } from "@common/SortableTableCell";
-import { ProtocolChip } from "@common/ProtocolChip";
-import { colors } from "@design";
-import { B4Badge } from "@common/B4Badge";
-import { asnStorage } from "@utils";
+import { useEffect, useRef, useState } from "react";
+
 import { ParsedLog } from "@b4.connections";
+import { Badge, Center, Group, TextInput } from "@mantine/core";
+import { useElementSize, useLocalStorage } from "@mantine/hooks";
+import { DataTable, DataTableSortStatus } from "mantine-datatable";
+
+import { IconAdd } from "@b4.icons";
+import { useFilteredLogs } from "@hooks/useDomainActions";
+import { sortBy } from "lodash";
 
 export type SortColumn =
   | "timestamp"
@@ -27,19 +17,38 @@ export type SortColumn =
   | "source"
   | "destination";
 
-interface DomainsTableProps {
-  data: ParsedLog[];
-  sortColumn: SortColumn | null;
-  sortDirection: SortDirection;
-  onSort: (column: SortColumn) => void;
+export interface TableSortProps {
+  logs: ParsedLog[];
   onDomainClick: (domain: string) => void;
   onIpClick: (ip: string) => void;
-  onScrollStateChange: (isAtBottom: boolean) => void;
 }
 
-const ROW_HEIGHT = 41;
-const OVERSCAN = 5;
+export function TableSort({ logs, onDomainClick, onIpClick }: TableSortProps) {
+  const [search, setSearch] = useLocalStorage({
+    key: "b4_connections_filter",
+    defaultValue: "",
+  });
 
+  const [sortStatus, setSortStatus] = useLocalStorage<
+    DataTableSortStatus<ParsedLog>
+  >({
+    key: "b4_connections_sort_status",
+    defaultValue: { columnAccessor: "timestamp", direction: "desc" },
+  });
+
+  const filteredLogs = useFilteredLogs(logs, search);
+
+  const [records, setRecords] = useState(sortBy(filteredLogs, "timestamp"));
+  useEffect(() => {
+    const data = sortBy(filteredLogs, sortStatus.columnAccessor) as ParsedLog[];
+    setRecords(sortStatus.direction === "desc" ? data.reverse() : data);
+  }, [sortStatus, filteredLogs]);
+
+  const handleSearchChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setSearch(event.currentTarget.value);
+  };
+
+  /*
 const TableRowMemo = memo<{
   log: ParsedLog;
   onDomainClick: (domain: string) => void;
@@ -51,325 +60,101 @@ const TableRowMemo = memo<{
       const asn = asnStorage.findAsnForIp(log.destination);
       return asn?.name || null;
     }, [log.destination]);
+*/
+  const { ref, height } = useElementSize();
 
-    return (
-      <TableRow
-        sx={{
-          height: ROW_HEIGHT,
-          "&:hover": {
-            bgcolor: colors.accent.primaryStrong,
-          },
-        }}
-      >
-        <TableCell
-          sx={{
-            color: "text.secondary",
-            fontFamily: "monospace",
-            fontSize: 12,
-            borderBottom: `1px solid ${colors.border.light}`,
-            py: 1,
-          }}
-        >
-          {log.timestamp.split(" ")[1]}
-        </TableCell>
-        <TableCell
-          sx={{
-            borderBottom: `1px solid ${colors.border.light}`,
-            py: 1,
-          }}
-        >
-          <ProtocolChip protocol={log.protocol} />
-        </TableCell>
-        <TableCell
-          sx={{
-            borderBottom: `1px solid ${colors.border.light}`,
-            py: 1,
-          }}
-        >
-          {(log.ipSet || log.hostSet) && (
-            <B4Badge color="secondary" label={log.ipSet || log.hostSet} />
-          )}
-        </TableCell>
-        <TableCell
-          sx={{
-            color: "text.primary",
-            borderBottom: `1px solid ${colors.border.light}`,
-            cursor: log.domain && !log.hostSet ? "pointer" : "default",
-            py: 1,
-            "&:hover":
-              log.domain && !log.hostSet
-                ? {
-                    bgcolor: colors.accent.primary,
-                    color: colors.secondary,
-                  }
-                : {},
-          }}
-          onClick={() =>
-            log.domain && !log.hostSet && onDomainClick(log.domain)
-          }
-        >
-          <Stack direction="row" spacing={1} alignItems="center">
-            {log.domain && <Typography>{log.domain}</Typography>}
-            <Box sx={{ flex: 1 }} />
-            {log.domain && !log.hostSet && (
-              <AddIcon
-                sx={{
-                  fontSize: 16,
-                  bgcolor: `${colors.secondary}88`,
-                  color: colors.background.default,
-                  borderRadius: "50%",
-                  cursor: "pointer",
-                  "&:hover": {
-                    bgcolor: colors.secondary,
-                  },
-                }}
-              />
-            )}
-          </Stack>
-        </TableCell>
-        <TableCell
-          sx={{
-            color: "text.secondary",
-            fontFamily: "monospace",
-            fontSize: 12,
-            borderBottom: `1px solid ${colors.border.light}`,
-            py: 1,
-          }}
-        >
-          <Tooltip title={log.source} placement="top" arrow>
-            {log.deviceName ? (
-              <B4Badge label={log.deviceName} color="primary" />
-            ) : (
-              <span>{log.source}</span>
-            )}
-          </Tooltip>
-        </TableCell>
-        <TableCell
-          sx={{
-            color: "text.primary",
-            borderBottom: `1px solid ${colors.border.light}`,
-            py: 1,
-          }}
-        >
-          <Stack direction="row" spacing={1} alignItems="center">
-            <Box
-              sx={{
-                cursor: !log.ipSet ? "pointer" : "default",
-                "&:hover": !log.ipSet
-                  ? {
-                      bgcolor: colors.accent.primary,
-                      color: colors.secondary,
-                    }
-                  : {},
-              }}
-              onClick={() =>
-                log.destination && !log.ipSet && onIpClick(log.destination)
-              }
-            >
-              {log.destination}
-            </Box>
-            {asnName && (
-              <B4Badge variant="outlined" color="primary" label={asnName} />
-            )}
-            <Box sx={{ flex: 1 }} />
-            {!log.ipSet && (
-              <AddIcon
-                onClick={() => onIpClick(log.destination)}
-                sx={{
-                  fontSize: 16,
-                  bgcolor: `${colors.secondary}88`,
-                  color: colors.background.default,
-                  borderRadius: "50%",
-                  cursor: "pointer",
-                  "&:hover": {
-                    bgcolor: colors.secondary,
-                  },
-                }}
-              />
-            )}
-          </Stack>
-        </TableCell>
-      </TableRow>
-    );
-  },
-  (prev, next) => prev.log.raw === next.log.raw
-);
-
-TableRowMemo.displayName = "TableRowMemo";
-
-export const DomainsTable = ({
-  data,
-  sortColumn,
-  sortDirection,
-  onSort,
-  onDomainClick,
-  onIpClick,
-  onScrollStateChange,
-}: DomainsTableProps) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [scrollTop, setScrollTop] = useState(0);
-  const [containerHeight, setContainerHeight] = useState(600);
-
-  const startIndex = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
-  const visibleCount = Math.ceil(containerHeight / ROW_HEIGHT) + OVERSCAN * 2;
-  const endIndex = Math.min(data.length, startIndex + visibleCount);
-
-  const visibleData = useMemo(
-    () => data.slice(startIndex, endIndex),
-    [data, startIndex, endIndex]
-  );
-
-  const handleScroll = useCallback(
-    (e: React.UIEvent<HTMLDivElement>) => {
-      const target = e.currentTarget;
-      setScrollTop(target.scrollTop);
-
-      const isAtBottom =
-        target.scrollHeight - target.scrollTop - target.clientHeight < 50;
-      onScrollStateChange(isAtBottom);
-    },
-    [onScrollStateChange]
-  );
-
+  const viewport = useRef<HTMLDivElement>(null);
+  const wasAtBottom = useRef(true);
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-
-    const observer = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        setContainerHeight(entry.contentRect.height);
-      }
-    });
-
-    observer.observe(container);
-    setContainerHeight(container.clientHeight);
-
-    return () => observer.disconnect();
+    const el = viewport.current;
+    if (!el) return;
+    const handler = () => {
+      wasAtBottom.current = el.scrollTop + el.clientHeight >= el.scrollHeight;
+    };
+    el.addEventListener("scroll", handler);
+    return () => el.removeEventListener("scroll", handler);
   }, []);
 
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
+    if (wasAtBottom.current) {
+      scrollToBottom();
+    }
+  }, [records]);
 
-    requestAnimationFrame(() => {
-      const isAtBottom =
-        container.scrollHeight - container.scrollTop - container.clientHeight <
-        100;
-      if (isAtBottom) {
-        container.scrollTop = container.scrollHeight;
-        setScrollTop(container.scrollTop);
-      }
+  const scrollToBottom = () =>
+    viewport.current!.scrollTo({
+      top: viewport.current!.scrollHeight,
     });
-  }, [data.length]);
 
   return (
-    <TableContainer
-      ref={containerRef}
-      onScroll={handleScroll}
-      sx={{
-        flex: 1,
-        backgroundColor: colors.background.dark,
-        overflow: "auto",
-      }}
-    >
-      <Table stickyHeader size="small">
-        <TableHead>
-          <TableRow>
-            <SortableTableCell
-              label="Time"
-              active={sortColumn === "timestamp"}
-              direction={sortColumn === "timestamp" ? sortDirection : null}
-              onSort={() => onSort("timestamp")}
-            />
-            <SortableTableCell
-              label="Protocol"
-              active={sortColumn === "protocol"}
-              direction={sortColumn === "protocol" ? sortDirection : null}
-              onSort={() => onSort("protocol")}
-            />
-            <SortableTableCell
-              label="Set"
-              active={sortColumn === "set"}
-              direction={sortColumn === "set" ? sortDirection : null}
-              onSort={() => onSort("set")}
-            />
-            <SortableTableCell
-              label="Domain"
-              active={sortColumn === "domain"}
-              direction={sortColumn === "domain" ? sortDirection : null}
-              onSort={() => onSort("domain")}
-            />
-            <SortableTableCell
-              label="Source"
-              active={sortColumn === "source"}
-              direction={sortColumn === "source" ? sortDirection : null}
-              onSort={() => onSort("source")}
-            />
-            <SortableTableCell
-              label="Destination"
-              active={sortColumn === "destination"}
-              direction={sortColumn === "destination" ? sortDirection : null}
-              onSort={() => onSort("destination")}
-            />
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {data.length === 0 ? (
-            <TableRow>
-              <TableCell
-                colSpan={6}
-                sx={{
-                  textAlign: "center",
-                  py: 4,
-                  color: "text.secondary",
-                  fontStyle: "italic",
-                  bgcolor: colors.background.dark,
-                  borderBottom: "none",
-                }}
-              >
-                Waiting for connections...
-              </TableCell>
-            </TableRow>
-          ) : (
-            <>
-              {startIndex > 0 && (
-                <TableRow>
-                  <TableCell
-                    colSpan={6}
-                    sx={{
-                      height: startIndex * ROW_HEIGHT,
-                      p: 0,
-                      border: "none",
-                    }}
-                  />
-                </TableRow>
-              )}
-
-              {visibleData.map((log) => (
-                <TableRowMemo
-                  key={log.raw}
-                  log={log}
-                  onDomainClick={onDomainClick}
-                  onIpClick={onIpClick}
-                />
-              ))}
-
-              {endIndex < data.length && (
-                <TableRow>
-                  <TableCell
-                    colSpan={6}
-                    sx={{
-                      height: (data.length - endIndex) * ROW_HEIGHT,
-                      p: 0,
-                      border: "none",
-                    }}
-                  />
-                </TableRow>
-              )}
-            </>
-          )}
-        </TableBody>
-      </Table>
-    </TableContainer>
+    <>
+      <TextInput
+        placeholder="Search (combine with +, exclude with !, e.g. tcp+!domain:google.com)"
+        value={search}
+        onChange={handleSearchChange}
+        ref={ref}
+      />
+      <DataTable
+        columns={[
+          {
+            accessor: "timestamp",
+            title: "Time",
+            sortable: true,
+            render: (record) => {
+              const t = record.timestamp;
+              return t?.includes(" ") ? t.split(" ")[1] : (t ?? "");
+            },
+          },
+          {
+            accessor: "protocol",
+            title: "Type",
+            sortable: true,
+            render: (record) => (
+              <Center>
+                <Badge variant="light">{record.protocol}</Badge>
+              </Center>
+            ),
+          },
+          { accessor: "ipSet", title: "Set", sortable: true },
+          {
+            accessor: "domain",
+            title: "Domain",
+            sortable: true,
+            render: (record) => (
+              <Group justify="space-between" wrap="nowrap">
+                {record.domain} {!record.hostSet && <IconAdd />}
+              </Group>
+            ),
+          },
+          { accessor: "source", title: "Source", sortable: true },
+          {
+            accessor: "destination",
+            title: "Destination",
+            sortable: true,
+            render: (record) => (
+              <Group justify="space-between" wrap="nowrap">
+                {record.destination} {!record.hostSet && <IconAdd />}
+              </Group>
+            ),
+          },
+        ]}
+        records={records}
+        noRecordsText="No connections yet..."
+        height={`calc(100dvh - var(--app-shell-header-height) - 2 * var(--mantine-spacing-md) - ${height}px)`}
+        scrollViewportRef={viewport}
+        sortStatus={sortStatus}
+        onSortStatusChange={setSortStatus}
+        onCellClick={({ record, column }) => {
+          if (!record.hostSet) {
+            if (column.accessor === "domain") onDomainClick(record.domain);
+            if (column.accessor === "destination") onIpClick(record.destination);
+          }
+        }}
+        textSelectionDisabled
+        highlightOnHover
+        withTableBorder
+        withColumnBorders
+      />
+    </>
   );
-};
+}

@@ -1,31 +1,22 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
-import { Container, Paper } from "@mui/material";
-import { DomainsControlBar } from "./ControlBar";
-import { AddSniModal } from "./AddSniModal";
-import { DomainsTable, SortColumn } from "./Table";
-import { SortDirection } from "@common/SortableTableCell";
-import {
-  useDomainActions,
-  useParsedLogs,
-  useEnrichedLogs,
-  useFilteredLogs,
-  useSortedLogs,
-} from "@hooks/useDomainActions";
-import { useIpActions } from "@hooks/useIpActions";
-import {
-  generateDomainVariants,
-  loadSortState,
-  saveSortState,
-  generateIpVariants,
-} from "@utils";
-import { colors } from "@design";
-import { useWebSocket } from "../../context/B4WsProvider";
-import { AddIpModal } from "./AddIpModal";
-import { B4Config, B4SetConfig } from "@models/config";
-import { useSnackbar } from "@context/SnackbarProvider";
 import { devicesApi } from "@b4.devices";
+import {
+  useAddDomain,
+  useEnrichedLogs,
+  useParsedLogs,
+} from "@hooks/useDomainActions";
+import { B4Config, B4SetConfig } from "@models/config";
+import { useHotkeys } from "@mantine/hooks";
+import { notifications } from "@mantine/notifications";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useWebSocket } from "../../context/B4WsProvider";
+import { useAddIp } from "@hooks/useIpActions";
+import { generateDomainVariants, generateIpVariants } from "@utils";
+import { AddIpModal } from "./AddIpModal";
+import { AddSniModal } from "./AddSniModal";
+import { TableSort } from "./Table";
 
-const MAX_DISPLAY_ROWS = 1000;
+const MAX_RAW_ROWS = 1000;
+const MAX_DISPLAY_ROWS = 500;
 
 export function ConnectionsPage() {
   const {
@@ -38,54 +29,28 @@ export function ConnectionsPage() {
     resetDomainsBadge,
   } = useWebSocket();
 
-  const [filter, setFilter] = useState(() => {
-    return localStorage.getItem("b4_connections_filter") || "";
-  });
+  const { addDomain } = useAddDomain();
+  const { addIp } = useAddIp();
+  const [domainModal, setDomainModal] = useState<{ domain: string; variants: string[] } | null>(null);
+  const [ipModal, setIpModal] = useState<{ ip: string; variants: string[] } | null>(null);
 
-  const [sortColumn, setSortColumn] = useState<SortColumn | null>(() => {
-    const saved = loadSortState();
-    return saved.column as SortColumn | null;
-  });
-  const [sortDirection, setSortDirection] = useState<SortDirection>(() => {
-    const saved = loadSortState();
-    return saved.direction;
-  });
-
-  const { modalState, openModal, closeModal, selectVariant, addDomain } =
-    useDomainActions();
-
-  const {
-    modalState: modalIpState,
-    openModal: openIpModal,
-    closeModal: closeIpModal,
-    selectVariant: selectIpVariant,
-    addIp,
-  } = useIpActions();
-  const { showSuccess } = useSnackbar();
+  const showSuccess = useCallback((message: string) => {
+    notifications.show({ title: "Success", message });
+  }, []);
 
   const [availableSets, setAvailableSets] = useState<B4SetConfig[]>([]);
   const [ipInfoToken, setIpInfoToken] = useState<string>("");
   const [devicesEnabled, setDevicesEnabled] = useState<boolean>(false);
   const [deviceMap, setDeviceMap] = useState<Record<string, string>>({});
 
-  useEffect(() => {
-    localStorage.setItem("b4_connections_filter", filter);
-  }, [filter]);
-
-  useEffect(() => {
-    saveSortState(sortColumn, sortDirection);
-  }, [sortColumn, sortDirection]);
-
   // Limit displayed rows for performance
-  const recentDomains = useMemo(
-    () => domains.slice(-MAX_DISPLAY_ROWS),
-    [domains]
-  );
-
+  const recentDomains = useMemo(() => domains.slice(-MAX_RAW_ROWS), [domains]);
   const parsedLogs = useParsedLogs(recentDomains, showAll);
-  const enrichedLogs = useEnrichedLogs(parsedLogs, deviceMap);
-  const filteredLogs = useFilteredLogs(enrichedLogs, filter);
-  const sortedData = useSortedLogs(filteredLogs, sortColumn, sortDirection);
+  const displayedLogs = useMemo(
+    () => parsedLogs.slice(-MAX_DISPLAY_ROWS),
+    [parsedLogs],
+  );
+  const enrichedLogs = useEnrichedLogs(displayedLogs, deviceMap);
 
   useEffect(() => {
     if (!devicesEnabled) {
@@ -133,173 +98,74 @@ export function ConnectionsPage() {
     };
   }, [fetchSets]);
 
-  const handleScrollStateChange = useCallback(() => {}, []);
-
-  const handleSort = useCallback((column: SortColumn) => {
-    setSortColumn((prevColumn) => {
-      if (prevColumn === column) {
-        setSortDirection((prevDir) => {
-          if (prevDir === "asc") return "desc";
-          if (prevDir === "desc") {
-            setSortColumn(null);
-            return null;
-          }
-          return "asc";
-        });
-        return prevColumn;
-      }
-      setSortDirection("asc");
-      return column;
-    });
-  }, []);
-
-  const handleClearSort = useCallback(() => {
-    setSortColumn(null);
-    setSortDirection(null);
-  }, []);
-
-  const handleIpClick = useCallback(
-    (ip: string) => {
-      const variants = generateIpVariants(ip);
-      openIpModal(ip, variants);
-    },
-    [openIpModal]
-  );
-
-  const handleDomainClick = useCallback(
-    (domain: string) => {
-      const variants = generateDomainVariants(domain);
-      openModal(domain, variants);
-    },
-    [openModal]
-  );
-
-  const handleHotkeysDown = useCallback(
-    (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement;
-      if (
-        target.tagName === "INPUT" ||
-        target.tagName === "TEXTAREA" ||
-        target.isContentEditable
-      ) {
-        return;
-      }
-
-      if ((e.ctrlKey && e.key === "x") || e.key === "Delete") {
-        e.preventDefault();
+  useHotkeys([
+    [
+      "mod+x",
+      () => {
         clearDomains();
         resetDomainsBadge();
         showSuccess("Cleared all domains");
-      } else if (e.key === "p" || e.key === "Pause") {
-        e.preventDefault();
+      },
+    ],
+    [
+      "Delete",
+      () => {
+        clearDomains();
+        resetDomainsBadge();
+        showSuccess("Cleared all domains");
+      },
+    ],
+    [
+      "p",
+      () => {
         setPauseDomains(!pauseDomains);
         showSuccess(`Domains ${pauseDomains ? "resumed" : "paused"}`);
-      }
-    },
-    [
-      clearDomains,
-      pauseDomains,
-      setPauseDomains,
-      resetDomainsBadge,
-      showSuccess,
-    ]
-  );
-
-  useEffect(() => {
-    globalThis.window.addEventListener("keydown", handleHotkeysDown);
-    return () => {
-      globalThis.window.removeEventListener("keydown", handleHotkeysDown);
-    };
-  }, [handleHotkeysDown]);
+      },
+    ],
+  ]);
 
   return (
-    <Container
-      maxWidth={false}
-      sx={{
-        flex: 1,
-        py: 3,
-        px: 3,
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-      }}
-    >
-      <Paper
-        elevation={0}
-        variant="outlined"
-        sx={{
-          flex: 1,
-          display: "flex",
-          flexDirection: "column",
-          overflow: "hidden",
-          border: "1px solid",
-          borderColor: pauseDomains
-            ? colors.border.strong
-            : colors.border.default,
-          transition: "border-color 0.3s",
+    <>
+      <TableSort
+        logs={enrichedLogs}
+        onDomainClick={(domain) => {
+          const v = generateDomainVariants(domain);
+          setDomainModal({ domain, variants: v.length ? v : [domain] });
         }}
-      >
-        <DomainsControlBar
-          filter={filter}
-          onFilterChange={setFilter}
-          totalCount={enrichedLogs.length}
-          filteredCount={filteredLogs.length}
-          sortColumn={sortColumn}
-          paused={pauseDomains}
-          showAll={showAll}
-          onShowAllChange={setShowAll}
-          onPauseChange={setPauseDomains}
-          onClearSort={handleClearSort}
-          onReset={clearDomains}
-        />
-
-        <DomainsTable
-          data={sortedData}
-          sortColumn={sortColumn}
-          sortDirection={sortDirection}
-          onSort={handleSort}
-          onDomainClick={handleDomainClick}
-          onIpClick={handleIpClick}
-          onScrollStateChange={handleScrollStateChange}
-        />
-      </Paper>
+        onIpClick={(ip) => {
+          const v = generateIpVariants(ip);
+          setIpModal({ ip: ip.split(":")[0].replaceAll(/[[\]]/g, ""), variants: v.length ? v : [ip] });
+        }}
+      />
 
       <AddSniModal
-        open={modalState.open}
-        domain={modalState.domain}
-        variants={modalState.variants}
-        selected={modalState.selected}
-        onClose={closeModal}
-        onSelectVariant={selectVariant}
+        opened={!!domainModal}
+        onClose={() => setDomainModal(null)}
+        domain={domainModal?.domain ?? ""}
+        variants={domainModal?.variants ?? []}
         sets={availableSets}
-        onAdd={(...args) => {
-          void (async () => {
-            await addDomain(...args);
-            await fetchSets();
-          })();
+        onAdd={async (domain, setId, setName) => {
+          await addDomain(domain, setId, setName);
+          await fetchSets();
         }}
       />
 
       <AddIpModal
-        open={modalIpState.open}
-        ip={modalIpState.ip}
-        variants={modalIpState.variants}
-        selected={modalIpState.selected as string}
+        opened={!!ipModal}
+        onClose={() => setIpModal(null)}
+        ip={ipModal?.ip ?? ""}
+        variants={ipModal?.variants ?? []}
         sets={availableSets}
-        ipInfoToken={ipInfoToken}
-        onClose={closeIpModal}
-        onSelectVariant={selectIpVariant}
-        onAdd={(...args) => {
-          void (async () => {
-            await addIp(...args);
-            await fetchSets();
-          })();
+        onAdd={async (entries, setId, setName) => {
+          await addIp(entries, setId, setName);
+          await fetchSets();
         }}
         onAddHostname={(hostname) => {
-          const variants = generateDomainVariants(hostname);
-          openModal(hostname, variants);
+          const v = generateDomainVariants(hostname);
+          setIpModal(null);
+          setDomainModal({ domain: hostname, variants: v.length ? v : [hostname] });
         }}
       />
-    </Container>
+    </>
   );
 }

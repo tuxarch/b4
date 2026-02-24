@@ -3,8 +3,8 @@ import { ParsedLog } from "@b4.logs";
 export const SORT_STORAGE_KEY = "b4_domains_sort";
 
 export interface DomainSortState {
-  column: string | null;
-  direction: "asc" | "desc" | null;
+  sortBy: keyof ParsedLog | null;
+  reverseSortDirection: boolean;
 }
 
 export function loadSortState(): DomainSortState {
@@ -16,17 +16,17 @@ export function loadSortState(): DomainSortState {
   } catch (e) {
     console.error("Failed to load sort state:", e);
   }
-  return { column: null, direction: null };
+  return { sortBy: null, reverseSortDirection: false };
 }
 
 export function saveSortState(
-  column: string | null,
-  direction: "asc" | "desc" | null,
+  sortBy: keyof ParsedLog | null,
+  reverseSortDirection: boolean,
 ): void {
   try {
     localStorage.setItem(
       SORT_STORAGE_KEY,
-      JSON.stringify({ column, direction }),
+      JSON.stringify({ sortBy, reverseSortDirection }),
     );
   } catch (e) {
     console.error("Failed to save sort state:", e);

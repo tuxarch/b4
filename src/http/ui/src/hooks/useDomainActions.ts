@@ -1,7 +1,6 @@
-import { useState, useCallback, useMemo, useRef } from "react";
-import { SortDirection } from "@common/SortableTableCell";
+import { notifications } from "@mantine/notifications";
 import { asnStorage } from "@utils";
-import { useSnackbar } from "@context/SnackbarProvider";
+import { useCallback, useMemo, useRef } from "react";
 
 // Types
 export type SortColumn =
@@ -23,13 +22,6 @@ export interface ParsedLog {
   raw: string;
   sourceAlias: string;
   deviceName: string;
-}
-
-interface DomainModalState {
-  open: boolean;
-  domain: string;
-  variants: string[];
-  selected: string;
 }
 
 // Simple LRU Cache for parsed logs
@@ -131,74 +123,29 @@ function parseSniLogLine(line: string): ParsedLog | null {
   return result;
 }
 
-// Domain actions hook
-export function useDomainActions() {
-  const { showSuccess, showError } = useSnackbar();
-  const [modalState, setModalState] = useState<DomainModalState>({
-    open: false,
-    domain: "",
-    variants: [],
-    selected: "",
-  });
-
-  const openModal = useCallback((domain: string, variants: string[]) => {
-    setModalState({
-      open: true,
-      domain,
-      variants,
-      selected: variants[0] || domain,
-    });
-  }, []);
-
-  const closeModal = useCallback(() => {
-    setModalState({
-      open: false,
-      domain: "",
-      variants: [],
-      selected: "",
-    });
-  }, []);
-
-  const selectVariant = useCallback((variant: string) => {
-    setModalState((prev) => ({ ...prev, selected: variant }));
-  }, []);
-
+export function useAddDomain() {
   const addDomain = useCallback(
-    async (setId: string, setName?: string) => {
-      if (!modalState.selected) return;
-
+    async (domain: string, setId: string, setName?: string) => {
+      if (!domain) return;
       try {
-        const response = await fetch("/api/geosite/domain", {
+        const res = await fetch("/api/geosite/domain", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            domain: modalState.selected,
-            set_id: setId,
-            set_name: setName,
-          }),
+          body: JSON.stringify({ domain, set_id: setId, set_name: setName }),
         });
-
-        if (response.ok) {
-          showSuccess(`Domain ${modalState.selected} added successfully`);
-          closeModal();
+        if (res.ok) {
+          notifications.show({ title: "Success", message: `Domain ${domain} added` });
         } else {
-          const error = (await response.json()) as { message: string };
-          showError(`Failed to add domain: ${error.message}`);
+          const { message } = (await res.json()) as { message: string };
+          notifications.show({ title: "Error", message: `Failed: ${message}` });
         }
-      } catch (error) {
-        showError(`Failed to add domain: ${String(error)}`);
+      } catch (e) {
+        notifications.show({ title: "Error", message: String(e) });
       }
     },
-    [modalState.selected, closeModal, showError, showSuccess],
+    [],
   );
-
-  return {
-    modalState,
-    openModal,
-    closeModal,
-    selectVariant,
-    addDomain,
-  };
+  return { addDomain };
 }
 
 // Optimized hook to parse logs
@@ -213,9 +160,8 @@ export function useParsedLogs(lines: string[], showAll: boolean): ParsedLog[] {
 
     if (prevShowAllRef.current !== showAll && prevLines === lines) {
       prevShowAllRef.current = showAll;
-      const filtered = showAll
-        ? prevResult
-        : prevResult.filter((log) => log.domain !== "");
+      const filtered =
+        showAll ? prevResult : prevResult.filter((log) => log.domain !== "");
       return filtered;
     }
 
@@ -248,9 +194,9 @@ export function useParsedLogs(lines: string[], showAll: boolean): ParsedLog[] {
         prevLinesRef.current = lines;
         prevResultRef.current = allParsed;
 
-        return showAll
-          ? allParsed
-          : allParsed.filter((log) => log.domain !== "");
+        return showAll ? allParsed : (
+            allParsed.filter((log) => log.domain !== "")
+          );
       }
     }
 
@@ -375,40 +321,4 @@ export function useFilteredLogs(
       return true;
     });
   }, [parsedLogs, filter]);
-}
-
-// Optimized sorting
-export function useSortedLogs(
-  filteredLogs: ParsedLog[],
-  sortColumn: SortColumn | null,
-  sortDirection: SortDirection,
-): ParsedLog[] {
-  return useMemo(() => {
-    if (!sortColumn || !sortDirection) {
-      return filteredLogs;
-    }
-
-    const sorted = [...filteredLogs].sort((a, b) => {
-      let aValue: string | number;
-      let bValue: string | number;
-
-      if (sortColumn === "timestamp") {
-        aValue = new Date(a.timestamp.replaceAll(/\/+/g, "-")).getTime() || 0;
-        bValue = new Date(b.timestamp.replaceAll(/\/+/g, "-")).getTime() || 0;
-      } else {
-        aValue = (a[sortColumn as keyof ParsedLog] || "")
-          .toString()
-          .toLowerCase();
-        bValue = (b[sortColumn as keyof ParsedLog] || "")
-          .toString()
-          .toLowerCase();
-      }
-
-      if (aValue < bValue) return sortDirection === "asc" ? -1 : 1;
-      if (aValue > bValue) return sortDirection === "asc" ? 1 : -1;
-      return 0;
-    });
-
-    return sorted;
-  }, [filteredLogs, sortColumn, sortDirection]);
 }

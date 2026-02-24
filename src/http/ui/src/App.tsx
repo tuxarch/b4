@@ -6,6 +6,7 @@ import {
   useLocation,
 } from "react-router";
 
+import { ConnectionsPage } from "@b4.connections";
 import { DashboardPage } from "@b4.dashboard";
 import {
   IconConnections,
@@ -16,6 +17,7 @@ import {
   IconSettings,
 } from "@b4.icons";
 import Version from "@components/version/Version";
+
 import {
   AppShell,
   Box,
@@ -26,11 +28,13 @@ import {
   NavLink,
   Title,
 } from "@mantine/core";
-import "@mantine/core/styles.css";
-
 import { useDisclosure } from "@mantine/hooks";
 import { Notifications } from "@mantine/notifications";
+
+import "@mantine/core/styles.css";
 import "@mantine/notifications/styles.css";
+import "mantine-datatable/styles.css";
+
 import { resolver, theme } from "./design/theme";
 
 interface NavItem {
@@ -92,7 +96,20 @@ export default function App() {
         </AppShell.Header>
 
         <AppShell.Navbar p="md">
-          <AppShell.Section p="md">{/*<Logo />*/}</AppShell.Section>
+          <AppShell.Section p="md">
+            <Group>
+              {/*<Logo />*/}
+              {
+                <Burger
+                  opened={mobileOpened}
+                  onClick={toggleMobile}
+                  hiddenFrom="sm"
+                  size="md"
+                  px="md"
+                />
+              }
+            </Group>
+          </AppShell.Section>
           <Divider />
           <AppShell.Section grow p="md">
             <Box>
@@ -118,7 +135,9 @@ export default function App() {
             <Route path="/dashboard" element={<DashboardPage />} />
             {/*
             <Route path="/sets/*" element={<SetsPage />} />
+            */}
             <Route path="/connections" element={<ConnectionsPage />} />
+            {/*
             <Route path="/discovery" element={<DiscoveryPage />} />
             <Route path="/logs" element={<LogsPage />} />
             <Route path="/settings/*" element={<SettingsPage />} />
