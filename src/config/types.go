@@ -35,22 +35,24 @@ type QueueConfig struct {
 
 type DevicesConfig struct {
 	Enabled      bool     `json:"enabled" bson:"enabled"`
+	VendorLookup bool     `json:"vendor_lookup" bson:"vendor_lookup"`
 	WhiteIsBlack bool     `json:"wisb" bson:"wisb"`
 	Mac          []string `json:"mac" bson:"mac"`
 }
 
 type TCPConfig struct {
-	ConnBytesLimit int `json:"conn_bytes_limit" bson:"conn_bytes_limit"`
-	Seg2Delay      int `json:"seg2delay" bson:"seg2delay"`
-	Seg2DelayMax   int `json:"seg2delay_max" bson:"seg2delay_max"`
+	ConnBytesLimit int   `json:"conn_bytes_limit" bson:"conn_bytes_limit"`
+	Seg2Delay      int   `json:"seg2delay" bson:"seg2delay"`
+	Seg2DelayMax   int   `json:"seg2delay_max" bson:"seg2delay_max"`
 	SynFake        bool  `json:"syn_fake" bson:"syn_fake"`
 	SynFakeLen     int   `json:"syn_fake_len" bson:"syn_fake_len"`
 	SynTTL         uint8 `json:"syn_ttl" bson:"syn_ttl"`
 	DropSACK       bool  `json:"drop_sack" bson:"drop_sack"`
 
-	Incoming IncomingConfig `json:"incoming" bson:"incoming"`
-	Desync   DesyncConfig   `json:"desync" bson:"desync"`
-	Win      WinConfig      `json:"win" bson:"win"`
+	Incoming  IncomingConfig  `json:"incoming" bson:"incoming"`
+	Desync    DesyncConfig    `json:"desync" bson:"desync"`
+	Win       WinConfig       `json:"win" bson:"win"`
+	Duplicate DuplicateConfig `json:"duplicate" bson:"duplicate"`
 }
 
 type WinConfig struct {
@@ -144,19 +146,34 @@ type SystemConfig struct {
 	Tables    TablesConfig    `json:"tables" bson:"tables"`
 	Logging   Logging         `json:"logging" bson:"logging"`
 	WebServer WebServerConfig `json:"web_server" bson:"web_server"`
+	Socks5    Socks5Config    `json:"socks5" bson:"socks5"`
 	Checker   DiscoveryConfig `json:"checker" bson:"checker"`
 	Geo       GeoDatConfig    `json:"geo" bson:"geo"`
 	API       ApiConfig       `json:"api" bson:"api"`
 }
 
+type Socks5Config struct {
+	Enabled        bool   `json:"enabled" bson:"enabled"`
+	Port           int    `json:"port" bson:"port"`
+	BindAddress    string `json:"bind_address" bson:"bind_address"`
+	Username       string `json:"username" bson:"username"`
+	Password       string `json:"password" bson:"password"`
+	UDPTimeout     int    `json:"udp_timeout" bson:"udp_timeout"`
+	UDPReadTimeout int    `json:"udp_read_timeout" bson:"udp_read_timeout"`
+}
+
 type TablesConfig struct {
-	MonitorInterval int  `json:"monitor_interval" bson:"monitor_interval"`
-	SkipSetup       bool `json:"skip_setup" bson:"skip_setup"`
+	MonitorInterval     int    `json:"monitor_interval" bson:"monitor_interval"`
+	SkipSetup           bool   `json:"skip_setup" bson:"skip_setup"`
+	Masquerade          bool   `json:"masquerade" bson:"masquerade"`
+	MasqueradeInterface string `json:"masquerade_interface" bson:"masquerade_interface"`
 }
 
 type WebServerConfig struct {
 	Port        int    `json:"port" bson:"port"`
 	BindAddress string `json:"bind_address" bson:"bind_address"`
+	TLSCert     string `json:"tls_cert" bson:"tls_cert"`
+	TLSKey      string `json:"tls_key" bson:"tls_key"`
 	IsEnabled   bool   `json:"-" bson:"-"`
 }
 
@@ -223,4 +240,9 @@ type DNSConfig struct {
 	Enabled       bool   `json:"enabled" bson:"enabled"`
 	TargetDNS     string `json:"target_dns" bson:"target_dns"`
 	FragmentQuery bool   `json:"fragment_query" bson:"fragment_query"`
+}
+
+type DuplicateConfig struct {
+	Enabled bool `json:"enabled" bson:"enabled"`
+	Count   int  `json:"count" bson:"count"` // Number of packet copies to send (original is dropped)
 }

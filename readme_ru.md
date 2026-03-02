@@ -284,6 +284,58 @@ sudo b4 --config /home/username/b4custom.json
 - Интеграция api ipinfo.io для сканирования ASN
 - Захват TLS и QUIC Payload
 
+## Поддержка HTTPS/TLS
+Включить HTTPS для веб-интерфейса можно в Web UI: **Settings > Network Configuration > Web Server** (поля TLS Certificate / TLS Key), или через конфиг:
+```json
+{
+  "system": {
+    "web_server": {
+      "tls_cert": "/path/to/server.crt",
+      "tls_key": "/path/to/server.key"
+    }
+  }
+}
+```
+Установщик автоматически обнаруживает сертификаты на **OpenWrt** (uhttpd) и **Asus Merlin** и включает HTTPS в конфиге.
+
+## SOCKS5 прокси
+
+B4 включает встроенный SOCKS5 прокси-сервер. Приложения с поддержкой SOCKS5 (браузеры, curl, торрент-клиенты и т.д.) могут направлять трафик через B4 без системной настройки.
+
+Включите в Web UI: **Settings > Network Configuration > SOCKS5 Server**, или через конфиг:
+
+```json
+{
+  "system": {
+    "socks5": {
+      "enabled": true,
+      "port": 1080,
+      "bind_address": "0.0.0.0",
+      "username": "",
+      "password": ""
+    }
+  }
+}
+```
+
+Оставьте `username` и `password` пустыми для работы без аутентификации.
+
+**Примеры:**
+
+```bash
+# curl
+curl --socks5 127.0.0.1:1080 https://example.com
+
+# Firefox: Настройки > Параметры сети > Ручная настройка прокси
+# Узел SOCKS: 127.0.0.1, Порт: 1080, SOCKS v5
+
+# Git
+git config --global http.proxy socks5://127.0.0.1:1080
+```
+
+> [!NOTE]
+> Перезапустите B4 после изменения настроек SOCKS5.
+
 ## Интеграция Geosite
 
 B4 поддерживает файлы [`geosite.dat` от v2ray/xray](https://github.com/v2fly/domain-list-community) из различных источников:
@@ -368,6 +420,7 @@ sudo ./out/b4 --verbose debug
 - [youtubeUnblock](https://github.com/Waujito/youtubeUnblock) - обход DPI на C
 - [GoodbyeDPI](https://github.com/ValdikSS/GoodbyeDPI) - обход DPI для Windows
 - [zapret](https://github.com/bol-van/zapret) - продвинутые техники обхода DPI
+- [dpi-detector](https://github.com/Runnin4ik/dpi-detector) - техники обнаружения DPI/ТСПУ
 
 ## Лицензия
 

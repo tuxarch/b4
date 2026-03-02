@@ -6,6 +6,9 @@ import {
   Collapse,
   Autocomplete,
   Paper,
+  ToggleButtonGroup,
+  ToggleButton,
+  Button,
 } from "@mui/material";
 import { FilterIcon, ExpandIcon, CollapseIcon } from "@b4.icons";
 import {
@@ -18,15 +21,20 @@ import {
 import { colors } from "@design";
 import { Capture } from "@b4.capture";
 
+export type TLSVersion = "auto" | "tls12" | "tls13";
+
 export interface DiscoveryOptions {
   skipDNS: boolean;
+  skipCache: boolean;
   payloadFiles: string[];
   validationTries: number;
+  tlsVersion: TLSVersion;
 }
 
 interface DiscoveryOptionsPanelProps {
   options: DiscoveryOptions;
   onChange: (options: DiscoveryOptions) => void;
+  onClearCache?: () => void;
   captures: Capture[];
   disabled?: boolean;
 }
@@ -34,6 +42,7 @@ interface DiscoveryOptionsPanelProps {
 export const DiscoveryOptionsPanel = ({
   options,
   onChange,
+  onClearCache,
   captures,
   disabled = false,
 }: DiscoveryOptionsPanelProps) => {
@@ -48,8 +57,10 @@ export const DiscoveryOptionsPanel = ({
   const tlsCaptures = captures.filter((c) => c.protocol === "tls");
   const hasOptions =
     options.skipDNS ||
+    options.skipCache ||
     options.payloadFiles.length > 0 ||
-    options.validationTries > 1;
+    options.validationTries > 1 ||
+    options.tlsVersion !== "auto";
 
   return (
     <Box
@@ -115,6 +126,82 @@ export const DiscoveryOptionsPanel = ({
               onChange={(checked) => onChange({ ...options, skipDNS: checked })}
               disabled={disabled}
             />
+
+            {/* Cache Controls */}
+            <Box>
+              <B4Switch
+                label="Skip Cached Strategies"
+                checked={options.skipCache}
+                onChange={(checked) =>
+                  onChange({ ...options, skipCache: checked })
+                }
+                disabled={disabled}
+              />
+              <Stack
+                direction="row"
+                alignItems="center"
+                spacing={1}
+                sx={{ mt: 0.5 }}
+              >
+                <Typography variant="caption" color="text.secondary">
+                  Previously successful configurations are tested first.
+                </Typography>
+                {onClearCache && (
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={onClearCache}
+                    disabled={disabled}
+                  >
+                    Clear Cache
+                  </Button>
+                )}
+              </Stack>
+            </Box>
+
+            {/* TLS Version */}
+            <Box>
+              <Typography variant="body1" sx={{ mb: 1 }}>
+                TLS Version
+              </Typography>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ mb: 1, display: "block" }}
+              >
+                TLS version used for discovery probes. Some DPI systems handle
+                TLS 1.2 and 1.3 differently.
+              </Typography>
+              <ToggleButtonGroup
+                value={options.tlsVersion}
+                exclusive
+                onChange={(_, value) => {
+                  if (value !== null) {
+                    onChange({ ...options, tlsVersion: value as TLSVersion });
+                  }
+                }}
+                disabled={disabled}
+                size="small"
+                sx={{
+                  "& .MuiToggleButton-root": {
+                    color: colors.text.secondary,
+                    borderColor: colors.border.default,
+                    textTransform: "none",
+                    px: 2,
+                    "&.Mui-selected": {
+                      bgcolor: colors.accent.secondary,
+                      color: colors.secondary,
+                      borderColor: colors.secondary,
+                      "&:hover": { bgcolor: colors.accent.secondary },
+                    },
+                  },
+                }}
+              >
+                <ToggleButton value="auto">Auto</ToggleButton>
+                <ToggleButton value="tls12">TLS 1.2</ToggleButton>
+                <ToggleButton value="tls13">TLS 1.3</ToggleButton>
+              </ToggleButtonGroup>
+            </Box>
 
             {/* Custom Payloads */}
             {tlsCaptures.length > 0 && (
@@ -185,7 +272,7 @@ export const DiscoveryOptionsPanel = ({
             {tlsCaptures.length === 0 && (
               <Typography variant="caption" color="text.secondary">
                 No captured payloads available.{" "}
-                <a href="/settings#capture" style={{ color: colors.secondary }}>
+                <a href="/settings/capture" style={{ color: colors.secondary }}>
                   Capture payloads
                 </a>{" "}
                 to test with custom TLS ClientHello.
@@ -201,6 +288,9 @@ export const DiscoveryOptionsPanel = ({
 function getOptionsSummary(options: DiscoveryOptions): string {
   const parts: string[] = [];
   if (options.skipDNS) parts.push("Skip DNS");
+  if (options.skipCache) parts.push("Skip Cache");
+  if (options.tlsVersion === "tls12") parts.push("TLS 1.2");
+  if (options.tlsVersion === "tls13") parts.push("TLS 1.3");
   if (options.validationTries > 1)
     parts.push(`${options.validationTries} tries`);
   if (options.payloadFiles.length > 0) {

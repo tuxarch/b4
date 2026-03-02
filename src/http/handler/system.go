@@ -20,27 +20,36 @@ func (api *API) RegisterSystemApi() {
 	api.mux.HandleFunc("/api/system/cache", api.handleCacheStats)
 }
 
-// detectServiceManager determines which service manager is managing B4
 func detectServiceManager() string {
-	// Check for systemd
 	if _, err := os.Stat("/etc/systemd/system/b4.service"); err == nil {
 		if _, err := exec.LookPath("systemctl"); err == nil {
 			return "systemd"
 		}
 	}
 
-	// Check for Entware/OpenWRT init script
 	if _, err := os.Stat("/opt/etc/init.d/S99b4"); err == nil {
 		return "entware"
 	}
 
-	// Check for standard init script
 	if _, err := os.Stat("/etc/init.d/b4"); err == nil {
 		return "init"
 	}
 
-	// Check if running as a standalone process (no service manager)
+	if isDockerEnvironment() {
+		return "docker"
+	}
+
 	return "standalone"
+}
+
+func isDockerEnvironment() bool {
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+	if os.Getenv("container") != "" {
+		return true
+	}
+	return false
 }
 
 func (api *API) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
@@ -50,13 +59,15 @@ func (api *API) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	serviceManager := detectServiceManager()
-	canRestart := serviceManager != "standalone"
+	isDocker := serviceManager == "docker"
+	canRestart := serviceManager != "standalone" && !isDocker
 
 	info := SystemInfo{
 		ServiceManager: serviceManager,
 		OS:             runtime.GOOS,
 		Arch:           runtime.GOARCH,
 		CanRestart:     canRestart,
+		IsDocker:       isDocker,
 	}
 
 	setJsonHeader(w)
@@ -108,17 +119,13 @@ func (api *API) handleRestart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Send response immediately before triggering restart
 	setJsonHeader(w)
 	json.NewEncoder(w).Encode(response)
 
-	// Flush the response to ensure it's sent
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
 
-	// Trigger restart in a goroutine with a small delay
-	// This allows the HTTP response to be sent before the service stops
 	go func() {
 		time.Sleep(500 * time.Millisecond)
 		log.Infof("Executing restart command: %s", response.RestartCommand)
@@ -184,6 +191,18 @@ func (api *API) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	serviceManager := detectServiceManager()
 	log.Infof("Update requested via web UI (service manager: %s, version: %s)", serviceManager, req.Version)
 
+	if serviceManager == "docker" {
+		response := UpdateResponse{
+			Success:        false,
+			Message:        "Cannot update: B4 is running inside Docker. Pull the latest image and recreate your container to update.",
+			ServiceManager: serviceManager,
+		}
+		setJsonHeader(w)
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
 	if serviceManager == "standalone" {
 		response := UpdateResponse{
 			Success:        false,
@@ -225,7 +244,6 @@ func (api *API) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		log.Infof("Installer downloaded, starting update process...")
 		log.Infof("Service will stop now - this is expected")
 
-		// Use systemd-run to execute in separate scope for systemd systems
 		var cmd *exec.Cmd
 		if serviceManager == "systemd" {
 			args := []string{"--scope", "--unit=b4-update", installerPath, "--update", "--quiet"}
@@ -234,7 +252,6 @@ func (api *API) handleUpdate(w http.ResponseWriter, r *http.Request) {
 			}
 			cmd = exec.Command("systemd-run", args...)
 		} else {
-			// For non-systemd, use nohup
 			args := []string{installerPath, "--update", "--quiet"}
 			if req.Version != "" {
 				args = append(args, req.Version)

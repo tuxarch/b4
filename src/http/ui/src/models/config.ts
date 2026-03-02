@@ -136,6 +136,7 @@ export interface QueueConfig {
 export interface DevicesConfig {
   mac: string[];
   enabled: boolean;
+  vendor_lookup: boolean;
   wisb: boolean;
 }
 
@@ -164,6 +165,7 @@ export interface TcpConfig {
   desync: DesyncConfig;
   win: WinConfig;
   incoming: IncomingConfig;
+  duplicate?: DuplicateConfig;
 }
 
 export interface IncomingConfig {
@@ -190,10 +192,14 @@ export interface DesyncConfig {
 export interface WebServerConfig {
   port: number;
   bind_address: string;
+  tls_cert: string;
+  tls_key: string;
 }
 export interface TableConfig {
   monitor_interval: number;
-  skip_setup: false;
+  skip_setup: boolean;
+  masquerade: boolean;
+  masquerade_interface: string;
 }
 
 export interface GeoConfig {
@@ -207,9 +213,20 @@ export interface ApiConfig {
   ipinfo_token: string;
 }
 
+export interface Socks5Config {
+  enabled: boolean;
+  port: number;
+  bind_address: string;
+  username: string;
+  password: string;
+  udp_timeout: number;
+  udp_read_timeout: number;
+}
+
 export interface SystemConfig {
   logging: LoggingConfig;
   web_server: WebServerConfig;
+  socks5: Socks5Config;
   tables: TableConfig;
   checker: DiscoveryConfig;
   geo: GeoConfig;
@@ -258,6 +275,11 @@ export interface DNSConfig {
   enabled: boolean;
   target_dns: string;
   fragment_query: boolean;
+}
+
+export interface DuplicateConfig {
+  enabled: boolean;
+  count: number;
 }
 
 export const MAIN_SET_ID = "11111111-1111-1111-1111-111111111111";

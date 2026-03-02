@@ -77,11 +77,11 @@ func GetCDNCategories(domain string) (geoip, geosite []string) {
 	return nil, nil
 }
 
-func (ds *DiscoverySuite) runDNSDiscovery() *DNSDiscoveryResult {
-	log.DiscoveryLogf("Phase DNS: Checking DNS poisoning for %s", ds.Domain)
+func (ds *DiscoverySuite) runDNSDiscoveryForDomain(domain string) *DNSDiscoveryResult {
+	log.DiscoveryLogf("  DNS: Checking DNS poisoning for %s", domain)
 
 	prober := NewDNSProber(
-		ds.Domain,
+		domain,
 		time.Duration(ds.cfg.System.Checker.DiscoveryTimeoutSec)*time.Second,
 		ds.pool,
 		ds.cfg,
@@ -93,21 +93,32 @@ func (ds *DiscoverySuite) runDNSDiscovery() *DNSDiscoveryResult {
 	return prober.Probe(ctx)
 }
 
-func (ds *DiscoverySuite) applyDNSConfig(dnsResult *DNSDiscoveryResult) {
-	if dnsResult == nil || !dnsResult.hasWorkingConfig() {
-		return
+// applyBestDNSConfig applies the best DNS bypass config found across all domains.
+func (ds *DiscoverySuite) applyBestDNSConfig() {
+	var bestServer string
+	needsFragment := false
+
+	for _, dnsResult := range ds.dnsResults {
+		if dnsResult == nil || !dnsResult.IsPoisoned {
+			continue
+		}
+		if dnsResult.BestServer != "" {
+			bestServer = dnsResult.BestServer
+			needsFragment = dnsResult.NeedsFragment
+			break
+		}
+		if dnsResult.NeedsFragment {
+			needsFragment = true
+		}
 	}
 
-	ds.cfg.MainSet.DNS = config.DNSConfig{
-		Enabled:       true,
-		TargetDNS:     dnsResult.BestServer,
-		FragmentQuery: dnsResult.NeedsFragment,
-	}
-
-	if dnsResult.BestServer != "" {
-		log.DiscoveryLogf("  Applied DNS bypass: server=%s, fragment=%v", dnsResult.BestServer, dnsResult.NeedsFragment)
-	} else if dnsResult.NeedsFragment {
-		log.DiscoveryLogf("  Applied DNS bypass: fragment=true")
+	if bestServer != "" || needsFragment {
+		ds.cfg.MainSet.DNS = config.DNSConfig{
+			Enabled:       true,
+			TargetDNS:     bestServer,
+			FragmentQuery: needsFragment,
+		}
+		log.DiscoveryLogf("  Applied DNS bypass: server=%s, fragment=%v", bestServer, needsFragment)
 	}
 }
 
@@ -132,8 +143,23 @@ func (p *DNSProber) Probe(ctx context.Context) *DNSDiscoveryResult {
 		ProbeResults: []DNSProbeResult{},
 	}
 
-	expectedIPs := p.getExpectedIPs(ctx)
-	systemIPs := p.getSystemResolverIPs(ctx)
+	// Run DoH and system resolver in parallel with independent timeouts.
+	var expectedIPs, systemIPs []string
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		dohCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		expectedIPs = p.getExpectedIPs(dohCtx)
+	}()
+	go func() {
+		defer wg.Done()
+		sysCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		systemIPs = p.getSystemResolverIPs(sysCtx)
+	}()
+	wg.Wait()
 
 	if len(expectedIPs) == 0 {
 		log.DiscoveryLogf("DNS Discovery: couldn't get reference IP for %s", p.domain)
@@ -154,6 +180,19 @@ func (p *DNSProber) Probe(ctx context.Context) *DNSDiscoveryResult {
 			isPoisoned = false
 			matchedIP = sysIP
 			break
+		}
+	}
+
+	if isPoisoned && len(systemIPs) > 0 {
+		valCtx, valCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer valCancel()
+		for _, sysIP := range systemIPs {
+			if p.testIPServesDomain(valCtx, sysIP) {
+				log.Tracef("DNS: system IP %s serves %s (CDN variance, not poisoned)", sysIP, p.domain)
+				isPoisoned = false
+				matchedIP = sysIP
+				break
+			}
 		}
 	}
 
@@ -237,6 +276,10 @@ func (p *DNSProber) getSystemResolverIPs(ctx context.Context) []string {
 	var result []string
 
 	for i := 0; i < 3; i++ {
+		if ctx.Err() != nil {
+			log.DiscoveryLogf("  DNS: context expired, stopping system resolver retries")
+			break
+		}
 		if i > 0 {
 			log.DiscoveryLogf("  DNS: retrying system resolver for %s (attempt %d)", p.domain, i+1)
 			time.Sleep(500 * time.Millisecond)

@@ -1,5 +1,55 @@
 # B4 - Bye Bye Big Bro
 
+## [1.39.0] - 2026-03-01
+
+- ADDED: **DPI Detector** — a new page in the sidebar that checks whether your ISP is tampering with your internet traffic. It runs three quick tests: DNS spoofing, blocked website detection, and connection dropping. Helps you see what your ISP is actually doing before and after enabling B4.
+- ADDED: **NAT Masquerade** — B4 can now set up NAT masquerade automatically when running inside containers (Docker, LXC, MikroTik CHR). No more manual scripts — just enable `NAT Masquerade` in `Settings > Feature Flags > Firewall Features` and optionally pick an output interface. Works with both `iptables` and `nftables`. Rules are monitored and auto-restored if they disappear. Also available via CLI: `--masquerade` and `--masquerade-interface`.
+- FIXED: **Custom payloads ignored during Discovery** — selecting custom payloads no longer silently falls back to built-in ones like duckduckgo. Your custom payloads are now properly used in the discovered configuration.
+- FIXED: **Discovery results not working after adding** — configurations that passed during Discovery could fail when actually applied. The tested config now matches exactly what gets saved.
+- FIXED: **TTL detection not working** — the optimal TTL search was not actually changing the fake packet's TTL, making all attempts look the same. Now correctly finds the minimum working TTL for your network.
+- FIXED: **Custom capture payloads lost when adding from Discovery** — configurations using captured payload files (e.g., from the `Capture feature`) would silently lose the payload data after being added, causing the bypass to fail.
+- ADDED: **Discovery Cache** — Discovery now remembers which bypass strategies worked before. When you run Discovery for a new domain, it tries previously successful configurations first, so you often get a working result quicker.
+- ADDED: **Multi-Domain Discovery** — you can now test multiple domains in a single Discovery run. Add domains or full URLs one by one (they appear as chips for easy management) and B4 will find the best bypass configuration for each one.
+- IMPROVED: **Smarter Discovery** — reworked strategy testing to use real-world technique combinations instead of testing individual tricks in isolation. If Discovery says a strategy works, it should actually work when you add it.
+- IMPROVED: **Smarter TTL in Discovery** — `Discovery` finds the optimal Fake TTL for Combo configurations automatically by scanning through preset TTL values, and tests all faking strategies (including `timestamp`) to pick the most reliable one.
+- IMPROVED: **Fullscreen Discovery Logs** — added a button to view Discovery logs in a large popup window, making long log lines much easier to read.
+- IMPROVED: **Set editor no longer jumps away after saving** — clicking "Save" now keeps you on the same tab and scroll position instead of going back to the sets list. This can help to speed up testing specific configurations.
+
+## [1.38.0] - 2026-02-27
+
+- CHANGED: **Vendor Lookup is now optional** — the ~6MB device manufacturer database is no longer downloaded at startup. Enable it in `Settings > Device Filtering > Vendor Lookup` if you want to see device brand names.
+- ADDED: **TLS Version selector in Discovery** — you can now choose which TLS version (`Auto` / `TLS 1.2` / `TLS 1.3`) to use when probing.
+- ADDED: **SOCKS5 Proxy** — B4 now includes a built-in SOCKS5 proxy server. Apps like browsers, curl, or torrent clients can route traffic through B4 without any system-wide setup. Enable it in `Settings > Network Configuration > SOCKS5 Server`. Supports optional username/password authentication. ([#48](https://github.com/DanielLavrushin/b4/pull/48), thanks [@remmody](https://github.com/remmody))
+- IMPROVED: **Docker support** — detects Docker environment and shows `docker pull` instructions instead of the update button.
+- FIXED: **Settings page crash (white screen) in container environments** — network interface filtering is now container-aware, showing `veth` and other container interfaces when running inside Docker/MikroTik. ([#44](https://github.com/DanielLavrushin/b4/issues/44), thanks [@kakosmakos](https://github.com/kakosmakos))
+- FIXED: **DNS check incorrectly reporting "DNS poisoned"** when everything is actually fine. The check could time out before even trying the system resolver, producing a false alarm. Also improved handling of CDN domains (YouTube, Google, etc.) where different resolvers return different but equally valid IPs. ([#46](https://github.com/DanielLavrushin/b4/issues/46))
+
+## [1.37.0] - 2026-02-26
+
+- ADDED: **HTTPS/TLS support** for the web interface ([#40](https://github.com/DanielLavrushin/b4/pull/40), thanks [@Shiperoid](https://github.com/Shiperoid)). Configure in Web UI (`Settings > Network > Web Server`) or in the config JSON. The installer auto-detects router certificates on **OpenWrt** and **Asus Merlin** and offers to enable HTTPS during installation.
+- IMPROVED: **Reset Statistics** button on the dashboard — clears all counters without restarting the service. Replaces the redundant restart button (still available in `Settings > Core Controls`).
+- FIXED: **Geo database download failing with 500 error** on routers with limited storage. Improved disk space handling and error reporting.
+
+## [1.36.0] - 2026-02-16
+
+- IMPROVED: **Connections Table** — moved the streaming/paused control from the top control bar to a floating play/stop button in the bottom-right corner of the table for a cleaner UI.
+- IMPROVED: **Set Editor Redesign** — simplified the tab layout from 7 tabs down to 5. `Fragmentation` and `Faking` tabs are now part of the `TCP` section where they belong, since both techniques operate on TCP traffic.
+  - **TCP** tab now has 3 inner tabs: `General` (connection limits, timing, duplication), `Splitting` (all packet splitting strategies), and `Faking` (all evasion techniques in one place).
+  - `Faking` groups related settings into collapsible sections (Fake SNI, SYN Fake, Desync, Window Manipulation, Incoming Response Bypass, ClientHello Mutation) — each section shows its current status at a glance so you can see what's active without opening it.
+  - `UDP`, `DNS`, `Targets`, and `Import/Export` tabs remain unchanged.
+
+## [1.35.2] - 2026-02-16
+
+- FIXED: All changes being lost and tabs resetting when creating a new `set`. Any edit (switching tabs, adding categories, changing settings) could be randomly undone.
+- FIXED: Custom TCP window values (add/remove) not being saved when using `Oscillate` or `Random` window modes.
+- FIXED: `Packet Duplication` connections showing incorrect data in the connections table.
+
+## [1.35.0] - 2026-02-15
+
+- IMPROVED: **Geo Settings** - `GeoSite` and `GeoIP` databases can now be downloaded independently from different sources. You no longer need both files — pick only what you need. Added [b4geoip](https://github.com/DanielLavrushin/b4geoip) as a built-in source option.
+- ADDED: **Packet Duplication** - bypass ISP throttling that works by randomly dropping packets to specific IP ranges (e.g. Telegram subnets). When enabled, B4 sends multiple copies of each outgoing packet so your connection survives even when the ISP drops some of them. Create a separate set with the target IPs, go to TCP settings, and enable Packet Duplication. Set the copy count (2-5 is usually enough). Note: this replaces all other DPI bypass for that set and uses extra bandwidth.
+- FIXED: Some connections to matched domains intermittently showing as "not matched". This was caused by an internal cache issue and learned IP associations being lost when saving settings or updating geo databases.
+
 ## [1.34.0] - 2026-02-10
 
 - ADDED: **Randomized Segment 2 Delay** - instead of a fixed delay between TCP/UDP segments, you can now set a min–max range. Each packet picks a random delay within your range, making your traffic look more natural and harder for DPI to fingerprint. If both values are the same, it works exactly like before.
@@ -181,7 +231,6 @@
 
 - FIXED: Slow set save operations - improve performance.
 - ADDED: New `FRAG` strategies designed for modern DPI (TSPU):
-
   - `Combo` (recommended) - multi-technique: first-byte delay + extension split + SNI split + disorder
   - `Disorder` - sends real segments out-of-order with timing jitter, no fake packets
   - `Overlap` - overlapping TCP segments where second overwrites first (RFC 793 behavior)

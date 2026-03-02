@@ -304,6 +304,38 @@ func (m *MetricsCollector) UpdateSingleWorker(workerID int, status string, proce
 	}
 }
 
+func (m *MetricsCollector) ResetStats() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.TotalConnections = 0
+	m.ActiveFlows = 0
+	m.PacketsProcessed = 0
+	m.BytesProcessed = 0
+	m.TCPConnections = 0
+	m.UDPConnections = 0
+	m.TargetedConnections = 0
+	m.CurrentCPS = 0
+	m.CurrentPPS = 0
+
+	m.TopDomains = make(map[string]uint64)
+	m.ProtocolDist = make(map[string]uint64)
+	m.GeoDist = make(map[string]uint64)
+	m.DeviceDomains = make(map[string]map[string]uint64)
+
+	m.ConnectionRate = make([]TimeSeriesPoint, 0, 60)
+	m.PacketRate = make([]TimeSeriesPoint, 0, 60)
+	m.RecentConnections = make([]ConnectionLog, 0, 10)
+	m.RecentEvents = make([]SystemEvent, 0, 20)
+
+	now := time.Now()
+	m.StartTime = now
+	m.lastUpdate = now
+	m.lastConnCount = 0
+	m.lastPacketCount = 0
+	m.Uptime = "0s"
+}
+
 func (m *MetricsCollector) CloseConnection() {
 	m.mu.Lock()
 	defer m.mu.Unlock()

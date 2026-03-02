@@ -9,7 +9,8 @@
 
 set -e
 
-export PATH="$HOME/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin:$PATH"
+# Entware paths first so wget-ssl/curl from /opt/bin are preferred over BusyBox
+export PATH="/opt/bin:/opt/sbin:$HOME/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin:$PATH"
 
 # --- END header.sh ---
 
@@ -26,6 +27,7 @@ BINARY_NAME="b4"
 CONFIG_FILE="" # Will be set after CONFIG_DIR is determined
 TEMP_DIR="/tmp/b4_install_$$"
 QUIET_MODE="0"
+WGET_INSECURE="" # Set to "--no-check-certificate" if CA certs are missing
 GEOSITE_SRC=""
 GEOSITE_DST=""
 # Proxy configuration for GitHub fallback
@@ -144,10 +146,45 @@ setup_directories() {
 
     # Create install directory if it doesn't exist
     if [ ! -d "$INSTALL_DIR" ]; then
-        mkdir -p "$INSTALL_DIR" || {
-            print_error "Failed to create install directory: $INSTALL_DIR"
+        if ! mkdir -p "$INSTALL_DIR" 2>/dev/null; then
+            # Install dir creation failed - likely read-only filesystem
+            print_warning "Cannot create $INSTALL_DIR (read-only filesystem?)"
+
+            # Try Entware fallback
+            if [ -d "/opt/sbin" ] && [ -w "/opt/sbin" ]; then
+                print_warning "Falling back to /opt/sbin (Entware)"
+                INSTALL_DIR="/opt/sbin"
+                CONFIG_DIR="/opt/etc/b4"
+                CONFIG_FILE="${CONFIG_DIR}/b4.json"
+                SERVICE_DIR="/opt/etc/init.d"
+                SERVICE_NAME="S99b4"
+            # Try /tmp fallback (non-persistent but always writable)
+            elif mkdir -p "/tmp/b4" 2>/dev/null; then
+                print_warning "Falling back to /tmp/b4 (non-persistent, will not survive reboot)"
+                INSTALL_DIR="/tmp/b4"
+            else
+                print_error "Failed to create install directory: $INSTALL_DIR"
+                print_error "Filesystem is read-only. Try installing Entware first."
+                exit 1
+            fi
+        fi
+    elif [ ! -w "$INSTALL_DIR" ]; then
+        # Directory exists but is not writable
+        print_warning "$INSTALL_DIR exists but is not writable"
+        if [ -d "/opt/sbin" ] && [ -w "/opt/sbin" ]; then
+            print_warning "Falling back to /opt/sbin (Entware)"
+            INSTALL_DIR="/opt/sbin"
+            CONFIG_DIR="/opt/etc/b4"
+            CONFIG_FILE="${CONFIG_DIR}/b4.json"
+            SERVICE_DIR="/opt/etc/init.d"
+            SERVICE_NAME="S99b4"
+        elif mkdir -p "/tmp/b4" 2>/dev/null; then
+            print_warning "Falling back to /tmp/b4 (non-persistent, will not survive reboot)"
+            INSTALL_DIR="/tmp/b4"
+        else
+            print_error "Failed to find writable install directory"
             exit 1
-        }
+        fi
     fi
 
     # Create config directory
@@ -242,75 +279,108 @@ convert_to_proxy_url() {
     esac
 }
 
+# Check if wget supports HTTPS
+wget_supports_https() {
+    # Try HTTPS HEAD request against multiple endpoints
+    # (github.com may be blocked in some regions)
+    for test_url in "https://proxy.lavrush.in" "https://github.com" "https://cloudflare.com"; do
+        if wget --spider -q --timeout=5 "$test_url" 2>/dev/null; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 # Download file from URL with GitHub fallback
 fetch_file() {
     url="$1"
     output="$2"
+    dl_err=""
 
-    # Try direct GitHub download first
-    if command_exists wget; then
-        if wget -q --timeout=10 -O "$output" "$url" 2>/dev/null; then
-            return 0
-        fi
-    elif command_exists curl; then
-        if curl -sfL --max-time 10 -o "$output" "$url" 2>/dev/null; then
-            return 0
-        fi
-    else
-        print_error "Neither wget nor curl found"
+    if ! command_exists curl && ! command_exists wget; then
+        print_error "Neither curl nor wget found"
         return 1
+    fi
+
+    # Try direct download - try both curl and wget (BusyBox curl may lack SSL)
+    if command_exists curl; then
+        dl_err=$(curl -sfL --max-time 10 -o "$output" "$url" 2>&1) && return 0
+    fi
+    if command_exists wget; then
+        dl_err=$(wget -q $WGET_INSECURE --timeout=10 -O "$output" "$url" 2>&1) && return 0
     fi
 
     # If direct download failed, try proxy fallback
     proxy_url=$(convert_to_proxy_url "$url")
     if [ "$proxy_url" != "$url" ]; then
         print_warning "Direct download failed, trying proxy (proxy.lavrush.in)..."
+        if command_exists curl; then
+            dl_err=$(curl -sfL --max-time 15 -o "$output" "$proxy_url" 2>&1) && return 0
+        fi
         if command_exists wget; then
-            wget -q --timeout=15 -O "$output" "$proxy_url" 2>/dev/null
-            return $?
-        elif command_exists curl; then
-            curl -sfL --max-time 15 -o "$output" "$proxy_url" 2>/dev/null
-            return $?
+            dl_err=$(wget -q $WGET_INSECURE --timeout=15 -O "$output" "$proxy_url" 2>&1) && return 0
         fi
     fi
 
-    print_error "Failed to download file from $url"
+    print_error "Failed to download: $url"
+    [ -n "$dl_err" ] && print_error "Last error: $dl_err"
     return 1
 }
 
 # Fetch URL content to stdout with GitHub fallback
 fetch_stdout() {
     url="$1"
+    dl_err=""
 
-    # Try direct GitHub download first
-    result=""
-    if command_exists wget; then
-        result=$(wget -qO- --timeout=10 "$url" 2>/dev/null)
-        if [ $? -eq 0 ] && [ -n "$result" ]; then
-            echo "$result"
-            return 0
-        fi
-    elif command_exists curl; then
-        result=$(curl -sfL --max-time 10 "$url" 2>/dev/null)
-        if [ $? -eq 0 ] && [ -n "$result" ]; then
-            echo "$result"
-            return 0
-        fi
-    else
+    if ! command_exists curl && ! command_exists wget; then
         return 1
+    fi
+
+    # Try direct download - try both curl and wget (BusyBox curl may lack SSL)
+    if command_exists curl; then
+        result=$(curl -sfL --max-time 10 "$url" 2>/tmp/b4_fetch_err) || true
+        dl_err=$(cat /tmp/b4_fetch_err 2>/dev/null)
+        rm -f /tmp/b4_fetch_err
+        if [ -n "$result" ]; then
+            echo "$result"
+            return 0
+        fi
+    fi
+    if command_exists wget; then
+        result=$(wget -qO- $WGET_INSECURE --timeout=10 "$url" 2>/tmp/b4_fetch_err) || true
+        dl_err=$(cat /tmp/b4_fetch_err 2>/dev/null)
+        rm -f /tmp/b4_fetch_err
+        if [ -n "$result" ]; then
+            echo "$result"
+            return 0
+        fi
     fi
 
     # If direct download failed, try proxy fallback
     proxy_url=$(convert_to_proxy_url "$url")
     if [ "$proxy_url" != "$url" ]; then
-        if command_exists wget; then
-            wget -qO- --timeout=15 "$proxy_url" 2>/dev/null
-        elif command_exists curl; then
-            curl -sfL --max-time 15 "$proxy_url" 2>/dev/null
+        print_warning "Direct download failed, trying proxy (proxy.lavrush.in)..."
+        if command_exists curl; then
+            result=$(curl -sfL --max-time 15 "$proxy_url" 2>/tmp/b4_fetch_err) || true
+            dl_err=$(cat /tmp/b4_fetch_err 2>/dev/null)
+            rm -f /tmp/b4_fetch_err
+            if [ -n "$result" ]; then
+                echo "$result"
+                return 0
+            fi
         fi
-        return $?
+        if command_exists wget; then
+            result=$(wget -qO- $WGET_INSECURE --timeout=15 "$proxy_url" 2>/tmp/b4_fetch_err) || true
+            dl_err=$(cat /tmp/b4_fetch_err 2>/dev/null)
+            rm -f /tmp/b4_fetch_err
+            if [ -n "$result" ]; then
+                echo "$result"
+                return 0
+            fi
+        fi
     fi
 
+    [ -n "$dl_err" ] && print_error "Download error: $dl_err"
     return 1
 }
 
@@ -362,7 +432,7 @@ check_dependencies() {
 
     missing_required=""
 
-    if ! command_exists wget && ! command_exists curl; then
+    if ! command_exists curl && ! command_exists wget; then
         missing_required="${missing_required} wget"
     fi
 
@@ -388,18 +458,151 @@ check_dependencies() {
         fi
     fi
 
+    # Check HTTPS support - critical for downloading from GitHub
+    ensure_https_support
+
     check_recommended_packages
+}
+
+# Check if curl supports HTTPS
+curl_supports_https() {
+    for test_url in "https://ya.ru"; do
+        if curl -sI --max-time 5 "$test_url" >/dev/null 2>&1; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Ensure wget/curl can handle HTTPS (critical for GitHub downloads)
+ensure_https_support() {
+    # If curl exists with SSL, we're fine
+    if command_exists curl; then
+        if curl_supports_https; then
+            return 0
+        fi
+    fi
+
+    # Check if wget supports HTTPS
+    if command_exists wget; then
+        if wget_supports_https; then
+            return 0
+        fi
+    fi
+
+    # Neither wget nor curl can do HTTPS
+    print_warning "HTTPS support not available (required for GitHub downloads)"
+
+    # Try to install wget-ssl and ca-certificates on Entware/OpenWrt
+    if command_exists opkg; then
+        print_info "Attempting to install wget-ssl and ca-certificates for HTTPS support..."
+        if [ "$QUIET_MODE" = "1" ]; then
+            opkg update >/dev/null 2>&1 || true
+            opkg install ca-certificates >/dev/null 2>&1 || true
+            opkg install wget-ssl >/dev/null 2>&1 || true
+        else
+            printf "${CYAN}Install wget-ssl and ca-certificates for HTTPS support? (Y/n): ${NC}"
+            read answer </dev/tty || answer="y"
+            case "$answer" in
+            [nN] | [nN][oO]) ;;
+            *)
+                opkg update >/dev/null 2>&1 || true
+                if opkg install ca-certificates >/dev/null 2>&1; then
+                    print_success "ca-certificates installed"
+                else
+                    print_warning "Failed to install ca-certificates"
+                fi
+                if opkg install wget-ssl >/dev/null 2>&1; then
+                    print_success "wget-ssl installed"
+                else
+                    print_warning "Failed to install wget-ssl"
+                fi
+                # Rehash PATH to pick up new binary
+                hash -r 2>/dev/null || true
+                ;;
+            esac
+        fi
+
+        # Verify HTTPS now works
+        if command_exists wget && wget_supports_https; then
+            return 0
+        fi
+        if command_exists curl && curl_supports_https; then
+            return 0
+        fi
+    fi
+
+    # Last resort: try --no-check-certificate (missing CA certs but SSL works)
+    if command_exists wget; then
+        if wget --spider -q --timeout=5 --no-check-certificate "https://github.com" 2>/dev/null; then
+            print_warning "HTTPS works only with --no-check-certificate (CA certificates missing)"
+            print_info "Install CA certificates: opkg install ca-certificates"
+            WGET_INSECURE="--no-check-certificate"
+            return 0
+        fi
+    fi
+
+    print_warning "HTTPS may not work - downloads from GitHub might fail"
+    print_info "On Entware/Keenetic: opkg install wget-ssl ca-certificates"
+    print_info "On OpenWrt: opkg install wget-ssl ca-certificates"
+}
+
+# Map kernel module package name to the actual module name for lsmod check
+kmod_to_module() {
+    case "$1" in
+    kmod-nfnetlink-queue) echo "nfnetlink_queue" ;;
+    kmod-ipt-nfqueue) echo "xt_NFQUEUE" ;;
+    kmod-ipt-raw) echo "iptable_raw" ;;
+    kmod-ipt-ipset) echo "ip_set" ;;
+    kmod-nft-core | kmod-nft-base) echo "nf_tables" ;;
+    kmod-nft-queue) echo "nft_queue" ;;
+    kmod-nf-conntrack-netlink) echo "nf_conntrack_netlink" ;;
+    iptables-mod-nfqueue) echo "xt_NFQUEUE" ;;
+    *) echo "" ;;
+    esac
+}
+
+# Check if a kernel module package is actually needed
+# Returns 0 (needed) or 1 (not needed / already loaded)
+kmod_pkg_needed() {
+    pkg="$1"
+    mod=$(kmod_to_module "$pkg")
+    [ -z "$mod" ] && return 0
+    # Module already loaded - no need for the package
+    lsmod 2>/dev/null | grep -q "^${mod}" && return 1
+    return 0
 }
 
 check_recommended_packages() {
     case "$SYSTEM_TYPE" in
     openwrt)
-        recommended="kmod-nft-queue kmod-nf-conntrack-netlink iptables-mod-nfqueue jq wget-ssl coreutils-nohup"
+        # Userspace packages always recommended
+        recommended="jq wget-ssl coreutils-nohup"
+        # Kernel module packages - only recommend if the module isn't already loaded
+        kmod_packages="kmod-nfnetlink-queue kmod-ipt-nfqueue kmod-ipt-raw kmod-ipt-ipset kmod-nft-core kmod-nft-queue kmod-nf-conntrack-netlink iptables-mod-nfqueue"
         pkg_cmd="opkg"
         ;;
     entware | merlin)
-        recommended="jq coreutils-nohup iptables"
+        recommended="ca-certificates curl wget-ssl jq coreutils-nohup iptables"
+        kmod_packages=""
         pkg_cmd="opkg"
+        ;;
+    padavan)
+        # If Entware is available, use opkg
+        if command_exists opkg; then
+            recommended="ca-certificates curl wget-ssl jq coreutils-nohup iptables"
+            kmod_packages=""
+            pkg_cmd="opkg"
+        else
+            missing=""
+            for cmd in jq nohup; do
+                command_exists "$cmd" || missing="${missing} $cmd"
+            done
+            [ -z "$missing" ] && return 0
+            print_warning "Recommended but missing:$missing"
+            print_warning "Install Entware to get a package manager: https://github.com/Entware/Entware/wiki"
+            return 0
+        fi
         ;;
     systemd-linux | sysv-linux | generic-linux)
         missing=""
@@ -428,9 +631,21 @@ check_recommended_packages() {
         ;;
     esac
 
+    # Check which userspace packages are missing
     missing=""
     for pkg in $recommended; do
         $pkg_cmd list-installed 2>/dev/null | grep -q "^${pkg} " || missing="${missing} $pkg"
+    done
+
+    # Check kernel module packages: skip if module already loaded or package not in repo
+    for pkg in $kmod_packages; do
+        # Skip if already installed
+        $pkg_cmd list-installed 2>/dev/null | grep -q "^${pkg} " && continue
+        # Skip if the kernel module is already loaded (built-in or loaded by firmware)
+        kmod_pkg_needed "$pkg" || continue
+        # Skip if the package doesn't exist in the repo
+        $pkg_cmd list "$pkg" 2>/dev/null | grep -q "^${pkg} " || continue
+        missing="${missing} $pkg"
     done
 
     [ -z "$missing" ] && return 0
@@ -498,6 +713,12 @@ detect_system_type() {
         return
     fi
 
+    # Check for Padavan firmware (has /etc/storage for persistent writable area and /etc_ro)
+    if [ -d "/etc/storage" ] && [ -d "/etc_ro" ]; then
+        echo "padavan"
+        return
+    fi
+
     # Check for standard systemd-based Linux
     if [ -d "/etc/systemd/system" ] && command_exists systemctl; then
         echo "systemd-linux"
@@ -524,6 +745,26 @@ set_system_paths() {
         CONFIG_DIR="/opt/etc/b4"
         SERVICE_DIR="/opt/etc/init.d"
         SERVICE_NAME="S99b4"
+        ;;
+    padavan)
+        # Padavan: root filesystem is read-only (squashfs)
+        # /etc/storage is the persistent writable JFFS partition
+        if [ -d "/opt/sbin" ] && [ -w "/opt/sbin" ]; then
+            # Entware is installed - use Entware paths
+            INSTALL_DIR="/opt/sbin"
+            CONFIG_DIR="/opt/etc/b4"
+            SERVICE_DIR="/opt/etc/init.d"
+            SERVICE_NAME="S99b4"
+        else
+            # No Entware - use /etc/storage (persistent) for config,
+            # /tmp for binary (non-persistent, re-download on boot via startup script)
+            INSTALL_DIR="/tmp/b4"
+            CONFIG_DIR="/etc/storage/b4"
+            SERVICE_DIR="/etc/storage"
+            SERVICE_NAME="b4"
+            print_warning "No Entware detected. Binary will be in /tmp (non-persistent)."
+            print_warning "Consider installing Entware for persistent installation."
+        fi
         ;;
     openwrt)
         # OpenWRT typically uses /usr/sbin or /usr/bin
@@ -630,7 +871,21 @@ detect_architecture() {
         ;;
     mips64)
         # Check MIPS endianness
-        if grep -qi "mips.*el\|el.*mips" /proc/cpuinfo 2>/dev/null || uname -m | grep -qi "el"; then
+        mips_le=false
+        if uname -m | grep -qi "el"; then
+            mips_le=true
+        elif [ -f /sys/kernel/cpu_byteorder ] && grep -qi "little" /sys/kernel/cpu_byteorder 2>/dev/null; then
+            mips_le=true
+        elif [ -f /proc/cpuinfo ] && grep -qi "little.endian\|byteorder.*little" /proc/cpuinfo 2>/dev/null; then
+            mips_le=true
+        elif command -v opkg >/dev/null 2>&1 && opkg print-architecture 2>/dev/null | grep -qi "mipsel\|mips64el"; then
+            mips_le=true
+        elif [ "$(dd if=/bin/sh bs=1 skip=5 count=1 2>/dev/null)" = "$(printf '\1')" ]; then
+            # ELF header byte 6 (index 5): 1=little-endian, 2=big-endian
+            mips_le=true
+        fi
+
+        if [ "$mips_le" = true ]; then
             arch_variant="mips64le"
         else
             arch_variant="mips64"
@@ -645,7 +900,20 @@ detect_architecture() {
         ;;
     mips*)
         # 32-bit MIPS - determine endianness
-        if grep -qi "mips.*el\|el.*mips" /proc/cpuinfo 2>/dev/null || uname -m | grep -qi "el"; then
+        mips_le=false
+        if uname -m | grep -qi "el"; then
+            mips_le=true
+        elif [ -f /sys/kernel/cpu_byteorder ] && grep -qi "little" /sys/kernel/cpu_byteorder 2>/dev/null; then
+            mips_le=true
+        elif [ -f /proc/cpuinfo ] && grep -qi "little.endian\|byteorder.*little" /proc/cpuinfo 2>/dev/null; then
+            mips_le=true
+        elif command -v opkg >/dev/null 2>&1 && opkg print-architecture 2>/dev/null | grep -qi "mipsel"; then
+            mips_le=true
+        elif [ "$(dd if=/bin/sh bs=1 skip=5 count=1 2>/dev/null)" = "$(printf '\1')" ]; then
+            mips_le=true
+        fi
+
+        if [ "$mips_le" = true ]; then
             arch_variant="mipsle"
         else
             arch_variant="mips"
@@ -1318,6 +1586,8 @@ install_b4() {
         exit 1
     }
 
+    rm -f "$archive_path"
+
     # Check if binary exists
     if [ ! -f "${BINARY_NAME}" ]; then
         print_error "Binary not found in archive"
@@ -1337,9 +1607,8 @@ install_b4() {
         mv "${INSTALL_DIR}/${BINARY_NAME}" "$BACKUP_FILE"
     fi
 
-    # Install the new binary
     print_info "Installing b4 to ${INSTALL_DIR}..."
-    cp "${BINARY_NAME}" "${INSTALL_DIR}/" || {
+    mv "${BINARY_NAME}" "${INSTALL_DIR}/" 2>/dev/null || cp "${BINARY_NAME}" "${INSTALL_DIR}/" || {
         print_error "Failed to copy binary to install directory"
         exit 1
     }
@@ -1361,12 +1630,32 @@ install_b4() {
     fi
 }
 
+detect_tls_certs() {
+    if [ -f "/etc/uhttpd.crt" ] && [ -f "/etc/uhttpd.key" ]; then
+        TLS_CERT="/etc/uhttpd.crt"
+        TLS_KEY="/etc/uhttpd.key"
+        return 0
+    fi
+
+    if [ -f "/etc/cert.pem" ] && [ -f "/etc/key.pem" ]; then
+        TLS_CERT="/etc/cert.pem"
+        TLS_KEY="/etc/key.pem"
+        return 0
+    fi
+    return 1
+}
+
 # Print web interface access information
 print_web_interface_info() {
+    local web_port="7000"
+    local protocol="http"
 
-    local web_port
     if [ -f "$CONFIG_FILE" ] && command_exists jq; then
-        web_port=$(jq -r '.web_server.port // 7000' "$CONFIG_FILE" 2>/dev/null)
+        web_port=$(jq -r '.system.web_server.port // 7000' "$CONFIG_FILE" 2>/dev/null)
+    fi
+
+    if detect_tls_certs >/dev/null 2>&1; then
+        protocol="https"
     fi
 
     echo ""
@@ -1377,18 +1666,12 @@ print_web_interface_info() {
 
     # Get LAN IP (br0 interface on routers)
     lan_ip=""
-
-    # Try to get IP from br0 specifically (most common on routers)
     if command_exists ip; then
         lan_ip=$(ip -4 addr show br0 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d'/' -f1)
     fi
-
-    # Fallback to ifconfig
     if [ -z "$lan_ip" ] && command_exists ifconfig; then
         lan_ip=$(ifconfig br0 2>/dev/null | grep 'inet addr:' | awk '{print $2}' | cut -d':' -f2)
     fi
-
-    # If br0 didn't work, look for any 192.168.x.x address
     if [ -z "$lan_ip" ]; then
         if command_exists ip; then
             lan_ip=$(ip -4 addr show 2>/dev/null | grep 'inet 192.168' | head -n1 | awk '{print $2}' | cut -d'/' -f1)
@@ -1397,29 +1680,12 @@ print_web_interface_info() {
         fi
     fi
 
-    # Print local/LAN access
     if [ -n "$lan_ip" ]; then
         print_info "Local network access (LAN):"
-        printf "        ${GREEN}http://%s:%s${NC}\n" "$lan_ip" "$web_port"
+        # Print URL with detected protocol (http/https)
+        printf "        ${GREEN}%s://%s:%s${NC}\n" "$protocol" "$lan_ip" "$web_port"
         printf "        (remember to start the service first)\n"
     fi
-
-    # # Get external IP
-    # print_info "Checking external IP address..."
-    # external_ip=""
-
-    # if command_exists curl; then
-    #     external_ip=$(curl -s --max-time 3 ifconfig.me 2>/dev/null || true)
-    # elif command_exists wget; then
-    #     external_ip=$(wget -qO- --timeout=3 ifconfig.me 2>/dev/null || true)
-    # fi
-
-    # # Print external access if different from LAN
-    # if [ -n "$external_ip" ] && [ "$external_ip" != "$lan_ip" ]; then
-    #     print_info "External access (WAN, if port ${web_port} is forwarded):"
-    #     printf "        ${GREEN}http://%s:%s${NC}\n" "$external_ip" "$web_port"
-    #     print_warning "Note: Ensure port ${web_port} is open in your firewall"
-    # fi
 
     echo ""
 }
@@ -1429,11 +1695,16 @@ main_install() {
 
     #  get args
     VERSION=""
+    FORCE_ARCH=""
     for arg in "$@"; do
         case "$arg" in
         v* | V*)
             VERSION="$arg"
             print_info "Using specified version: $VERSION"
+            ;;
+        --arch=*)
+            FORCE_ARCH="${arg#*=}"
+            print_info "Using specified architecture: $FORCE_ARCH"
             ;;
         --quiet | -q)
             QUIET_MODE=1
@@ -1465,10 +1736,16 @@ main_install() {
     check_dependencies
 
     # Detect architecture
-    print_info "Detecting system architecture..."
-    ARCH=$(detect_architecture)
-    print_info "Raw architecture: $(uname -m)"
-    print_success "Architecture detected: $ARCH"
+    if [ -n "$FORCE_ARCH" ]; then
+        ARCH="$FORCE_ARCH"
+        print_info "Raw architecture: $(uname -m)"
+        print_success "Using forced architecture: $ARCH"
+    else
+        print_info "Detecting system architecture..."
+        ARCH=$(detect_architecture)
+        print_info "Raw architecture: $(uname -m)"
+        print_success "Architecture detected: $ARCH"
+    fi
 
     if [ -z "$VERSION" ]; then
         print_info "Fetching latest release information..."
@@ -1486,6 +1763,31 @@ main_install() {
     create_systemd_service
     if [ "$SYSTEMCTL_CREATED" != "1" ]; then
         create_sysv_service
+
+        # Offer HTTPS setup if router certificates are detected
+        if detect_tls_certs && [ "$QUIET_MODE" = "0" ] && [ -f "$CONFIG_FILE" ] && command_exists jq; then
+            current_cert=$(jq -r '.system.web_server.tls_cert // ""' "$CONFIG_FILE" 2>/dev/null)
+            if [ -z "$current_cert" ]; then
+                echo ""
+                print_info "Router SSL certificates detected: $TLS_CERT"
+                printf "${CYAN}Enable HTTPS for the B4 web interface? (Y/n): ${NC}"
+                read tls_answer </dev/tty || tls_answer="y"
+                if [ -z "$tls_answer" ]; then
+                    tls_answer="y"
+                fi
+                case "$tls_answer" in
+                [nN] | [nN][oO])
+                    print_info "HTTPS not enabled. You can enable it later in Settings > Web Server."
+                    ;;
+                *)
+                    jq --arg cert "$TLS_CERT" --arg key "$TLS_KEY" \
+                        '.system.web_server.tls_cert = $cert | .system.web_server.tls_key = $key' \
+                        "$CONFIG_FILE" >"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+                    print_success "HTTPS enabled with $TLS_CERT"
+                    ;;
+                esac
+            fi
+        fi
     fi
 
     if [ "$QUIET_MODE" = "0" ]; then
@@ -1636,9 +1938,15 @@ remove_b4() {
         ;;
     esac
 
-    # Remove log files
+    # Remove log files and directories
     rm -f /var/log/b4.log 2>/dev/null || true
+    rm -rf /var/log/b4 2>/dev/null || true
     rm -f /var/run/b4.pid 2>/dev/null || true
+
+    # Remove temporary files created by b4
+    rm -rf /tmp/b4_* 2>/dev/null || true
+    rm -f /tmp/b4install_update.sh 2>/dev/null || true
+    rm -rf /tmp/b4 2>/dev/null || true
 
     echo ""
     print_success "B4 has been uninstalled successfully!"
@@ -1900,11 +2208,11 @@ check_multiport_support() {
 
     # Try to add a test rule using multiport
     # Try with -w first (lock wait), fall back without it for older iptables
-    if iptables -w -t filter -A INPUT -p tcp -m multiport --dports 80,443 -j ACCEPT 2>/dev/null || \
-       iptables -t filter -A INPUT -p tcp -m multiport --dports 80,443 -j ACCEPT 2>/dev/null; then
+    if iptables -w -t filter -A INPUT -p tcp -m multiport --dports 80,443 -j ACCEPT 2>/dev/null ||
+        iptables -t filter -A INPUT -p tcp -m multiport --dports 80,443 -j ACCEPT 2>/dev/null; then
         # Success - remove it immediately (try both variants)
-        iptables -w -t filter -D INPUT -p tcp -m multiport --dports 80,443 -j ACCEPT 2>/dev/null || \
-        iptables -t filter -D INPUT -p tcp -m multiport --dports 80,443 -j ACCEPT 2>/dev/null
+        iptables -w -t filter -D INPUT -p tcp -m multiport --dports 80,443 -j ACCEPT 2>/dev/null ||
+            iptables -t filter -D INPUT -p tcp -m multiport --dports 80,443 -j ACCEPT 2>/dev/null
         # Check if loaded as module or built-in
         if lsmod 2>/dev/null | grep -q "^xt_multiport"; then
             echo "works_module"
@@ -1930,23 +2238,36 @@ show_system_info() {
 
     print_header "System Information"
 
-    # OS Detection
-    os_type="Unknown"
-    if [ -f /etc/openwrt_release ]; then
+    # Map SYSTEM_TYPE (from detect_system_type) to display name
+    os_version=""
+    case "$SYSTEM_TYPE" in
+    openwrt)
         os_type="OpenWRT"
-        os_version=$(grep 'DISTRIB_RELEASE' /etc/openwrt_release | cut -d'=' -f2 | tr -d "'\"" || true)
-    elif [ -f /etc/merlinwrt_release ]; then
+        os_version=$(grep 'DISTRIB_RELEASE' /etc/openwrt_release 2>/dev/null | cut -d'=' -f2 | tr -d "'\"" || true)
+        ;;
+    merlin)
         os_type="MerlinWRT"
         os_version=$(cat /etc/merlinwrt_release 2>/dev/null || true)
-    elif [ -f /etc/entware_release ]; then
+        ;;
+    entware)
         os_type="Entware"
-        os_version=$(cat /etc/entware_release 2>/dev/null || true)
-    elif [ -f /etc/os-release ]; then
-        os_type=$(grep '^NAME=' /etc/os-release | cut -d'=' -f2 | tr -d '"' || echo "Linux")
-        os_version=$(grep '^VERSION=' /etc/os-release | cut -d'=' -f2 | tr -d '"' || true)
-    else
+        os_version=$(cat /opt/etc/entware_release 2>/dev/null || true)
+        ;;
+    padavan)
+        os_type="Padavan"
+        ;;
+    systemd-linux | sysv-linux | generic-linux)
+        if [ -f /etc/os-release ]; then
+            os_type=$(grep '^NAME=' /etc/os-release | cut -d'=' -f2 | tr -d '"' || echo "Linux")
+            os_version=$(grep '^VERSION=' /etc/os-release | cut -d'=' -f2 | tr -d '"' || true)
+        else
+            os_type="Linux"
+        fi
+        ;;
+    *)
         os_type="Linux"
-    fi
+        ;;
+    esac
 
     print_detail "Operating System" "$os_type ${os_version}"
     print_detail "Kernel Version" "$(uname -r)"
@@ -2277,8 +2598,23 @@ show_system_info() {
     fi
 
     # Check for missing kernel modules
-    if [ "$(check_kernel_module nf_conntrack)" = "missing" ]; then
-        printf "  ${YELLOW}⚠${NC}  nf_conntrack module not found - may need kernel rebuild"
+    if [ "$(check_kernel_module nf_conntrack)" = "unknown" ]; then
+        printf "  ${RED}✗${NC}  nf_conntrack module not found"
+        recommendations=$((recommendations + 1))
+    fi
+
+    if [ "$(check_kernel_module xt_connbytes)" = "unknown" ]; then
+        printf "  ${RED}✗${NC}  xt_connbytes module not found"
+        recommendations=$((recommendations + 1))
+    fi
+
+    if [ "$(check_kernel_module xt_NFQUEUE)" = "unknown" ]; then
+        printf "  ${RED}✗${NC}  xt_NFQUEUE module not found"
+        recommendations=$((recommendations + 1))
+    fi
+
+    if [ "$(check_kernel_module xt_multiport)" = "unknown" ]; then
+        printf "  ${RED}✗${NC}  xt_multiport module not found"
         recommendations=$((recommendations + 1))
     fi
 
@@ -2312,6 +2648,7 @@ show_system_info() {
 
 }
 
+
 # --- END sysinfo.sh ---
 
 # Main function - parse arguments
@@ -2337,21 +2674,28 @@ main() {
             echo "Usage: $0 [OPTIONS] [VERSION]"
             echo ""
             echo "Options:"
-            echo "  --sysinfo, -i     Show system information and b4 status"
-            echo "  --remove, -r      Uninstall b4 from the system"
-            echo "  --update, -u      Update b4 to latest version"
-            echo "  --help, -h        Show this help message"
-            echo "  --quiet, -q       Suppress output except for errors"
-            echo "  --geosite-src URL Specify geosite.dat source URL"
-            echo "  --geosite-dst DIR Specify directory to save geosite.dat"
-            echo "  VERSION           Install specific version (e.g., v1.4.0)"
+            echo "  --sysinfo, -i       Show system information and b4 status"
+            echo "  --remove, -r        Uninstall b4 from the system"
+            echo "  --update, -u        Update b4 to latest version"
+            echo "  --arch=ARCH         Force architecture (skip auto-detection)"
+            echo "  --help, -h          Show this help message"
+            echo "  --quiet, -q         Suppress output except for errors"
+            echo "  --geosite-src URL   Specify geosite.dat source URL"
+            echo "  --geosite-dst DIR   Specify directory to save geosite.dat"
+            echo "  VERSION             Install specific version (e.g., v1.4.0)"
+            echo ""
+            echo "Architectures:"
+            echo "  amd64, 386, arm64, armv5, armv6, armv7,"
+            echo "  mips, mipsle, mips_softfloat, mipsle_softfloat,"
+            echo "  mips64, mips64le, loong64, ppc64, ppc64le, riscv64, s390x"
             echo ""
             echo "Examples:"
-            echo "  $0                Install latest version"
-            echo "  $0 v1.4.0         Install version 1.4.0"
-            echo "  $0 --sysinfo      Show system diagnostics"
-            echo "  $0 --update       Update to latest version"
-            echo "  $0 --remove       Uninstall b4"
+            echo "  $0                          Install latest version"
+            echo "  $0 v1.4.0                   Install version 1.4.0"
+            echo "  $0 --arch=mipsle_softfloat  Force architecture"
+            echo "  $0 --sysinfo                Show system diagnostics"
+            echo "  $0 --update                 Update to latest version"
+            echo "  $0 --remove                 Uninstall b4"
             exit 0
             ;;
         esac

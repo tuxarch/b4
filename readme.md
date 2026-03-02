@@ -96,7 +96,7 @@ make linux-armv7
 docker run --network host \
   --cap-add NET_ADMIN --cap-add NET_RAW --cap-add SYS_MODULE \
   -v /etc/b4:/etc/b4 \
-  lavrushin/b4:latest --web-port 7000
+  lavrushin/b4:latest --config /opt/etc/b4/b4.json
 ```
 
 Web UI: <http://localhost:7000>
@@ -115,6 +115,7 @@ services:
       - SYS_MODULE
     volumes:
       - ./config:/etc/b4
+    command: ["--config", "/etc/b4/b4.json"]
     restart: unless-stopped
 ```
 
@@ -178,6 +179,61 @@ The web interface is available at `http://your-ip:7000` (default port, can be ch
 - ipinfo.io api integration for ASN scanning
 - Custom payload capturing for faking
 
+## HTTPS / TLS Support
+
+You can enable HTTPS for the web interface in the Web UI under **Settings > Network Configuration > Web Server** (TLS Certificate / TLS Key fields), or by setting `tls_cert` and `tls_key` in the config JSON:
+
+```json
+{
+  "system": {
+    "web_server": {
+      "tls_cert": "/path/to/server.crt",
+      "tls_key": "/path/to/server.key"
+    }
+  }
+}
+```
+
+The installer automatically detects router certificates on **OpenWrt** (uhttpd) and **Asus Merlin** and enables HTTPS in the config if they are found.
+
+## SOCKS5 Proxy
+
+B4 includes a built-in SOCKS5 proxy server. Applications that support SOCKS5 (browsers, curl, torrent clients, etc.) can route traffic through B4 without any system-wide configuration.
+
+Enable it in the Web UI under **Settings > Network Configuration > SOCKS5 Server**, or in the config JSON:
+
+```json
+{
+  "system": {
+    "socks5": {
+      "enabled": true,
+      "port": 1080,
+      "bind_address": "0.0.0.0",
+      "username": "",
+      "password": ""
+    }
+  }
+}
+```
+
+Leave `username` and `password` empty for no authentication.
+
+**Examples:**
+
+```bash
+# curl
+curl --socks5 127.0.0.1:1080 https://example.com
+
+# Firefox: Preferences > Network Settings > Manual proxy
+# SOCKS Host: 127.0.0.1, Port: 1080, SOCKS v5
+
+# Git
+git config --global http.proxy socks5://127.0.0.1:1080
+```
+
+> [!NOTE]
+> Restart B4 after changing SOCKS5 settings.
+
 ## Geosite Integration
 
 B4 supports [v2ray/xray `geosite.dat`](https://github.com/v2fly/domain-list-community) files from various sources:
@@ -213,6 +269,7 @@ Based on research from:
 - [youtubeUnblock](https://github.com/Waujito/youtubeUnblock) - C-based DPI bypass
 - [GoodbyeDPI](https://github.com/ValdikSS/GoodbyeDPI) - Windows DPI circumvention
 - [zapret](https://github.com/bol-van/zapret) - Advanced DPI bypass techniques
+- [dpi-detector](https://github.com/Runnin4ik/dpi-detector) - DPI/TSPU detection techniques
 
 ## License
 

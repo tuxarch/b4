@@ -20,6 +20,7 @@ func GetMetricsCollector() *metrics.MetricsCollector {
 func (api *API) RegisterMetricsApi() {
 	api.mux.HandleFunc("/api/metrics", api.getMetrics)
 	api.mux.HandleFunc("/api/metrics/summary", api.getMetricsSummary)
+	api.mux.HandleFunc("/api/metrics/reset", api.resetMetrics)
 }
 
 func (a *API) getMetrics(w http.ResponseWriter, r *http.Request) {
@@ -33,6 +34,21 @@ func (a *API) getMetrics(w http.ResponseWriter, r *http.Request) {
 	setJsonHeader(w)
 	enc := json.NewEncoder(w)
 	_ = enc.Encode(metricsData)
+}
+
+func (a *API) resetMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	metrics.GetMetricsCollector().ResetStats()
+
+	setJsonHeader(w)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Statistics reset successfully",
+	})
 }
 
 func (a *API) getMetricsSummary(w http.ResponseWriter, r *http.Request) {

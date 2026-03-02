@@ -4,13 +4,13 @@ import {
   useEnrichedLogs,
   useParsedLogs,
 } from "@hooks/useDomainActions";
-import { B4Config, B4SetConfig } from "@models/config";
+import { useAddIp } from "@hooks/useIpActions";
 import { useHotkeys } from "@mantine/hooks";
 import { notifications } from "@mantine/notifications";
+import { B4Config, B4SetConfig } from "@models/config";
+import { generateDomainVariants, generateIpVariants } from "@utils";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useWebSocket } from "../../context/B4WsProvider";
-import { useAddIp } from "@hooks/useIpActions";
-import { generateDomainVariants, generateIpVariants } from "@utils";
 import { AddIpModal } from "./AddIpModal";
 import { AddSniModal } from "./AddSniModal";
 import { TableSort } from "./Table";
@@ -31,8 +31,14 @@ export function ConnectionsPage() {
 
   const { addDomain } = useAddDomain();
   const { addIp } = useAddIp();
-  const [domainModal, setDomainModal] = useState<{ domain: string; variants: string[] } | null>(null);
-  const [ipModal, setIpModal] = useState<{ ip: string; variants: string[] } | null>(null);
+  const [domainModal, setDomainModal] = useState<{
+    domain: string;
+    variants: string[];
+  } | null>(null);
+  const [ipModal, setIpModal] = useState<{
+    ip: string;
+    variants: string[];
+  } | null>(null);
 
   const showSuccess = useCallback((message: string) => {
     notifications.show({ title: "Success", message });
@@ -81,7 +87,11 @@ export function ConnectionsPage() {
         if (data.system?.api?.ipinfo_token) {
           setIpInfoToken(data.system.api.ipinfo_token);
         }
-        setDevicesEnabled(data.queue?.devices?.enabled || false);
+        setDevicesEnabled(
+          data.queue?.devices?.enabled ||
+            data.queue?.devices?.vendor_lookup ||
+            false,
+        );
       }
     } catch (error) {
       if ((error as Error).name !== "AbortError") {
@@ -134,7 +144,10 @@ export function ConnectionsPage() {
         }}
         onIpClick={(ip) => {
           const v = generateIpVariants(ip);
-          setIpModal({ ip: ip.split(":")[0].replaceAll(/[[\]]/g, ""), variants: v.length ? v : [ip] });
+          setIpModal({
+            ip: ip.split(":")[0].replaceAll(/[[\]]/g, ""),
+            variants: v.length ? v : [ip],
+          });
         }}
       />
 
@@ -163,7 +176,10 @@ export function ConnectionsPage() {
         onAddHostname={(hostname) => {
           const v = generateDomainVariants(hostname);
           setIpModal(null);
-          setDomainModal({ domain: hostname, variants: v.length ? v : [hostname] });
+          setDomainModal({
+            domain: hostname,
+            variants: v.length ? v : [hostname],
+          });
         }}
       />
     </>

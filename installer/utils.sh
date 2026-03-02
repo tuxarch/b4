@@ -80,10 +80,45 @@ setup_directories() {
 
     # Create install directory if it doesn't exist
     if [ ! -d "$INSTALL_DIR" ]; then
-        mkdir -p "$INSTALL_DIR" || {
-            print_error "Failed to create install directory: $INSTALL_DIR"
+        if ! mkdir -p "$INSTALL_DIR" 2>/dev/null; then
+            # Install dir creation failed - likely read-only filesystem
+            print_warning "Cannot create $INSTALL_DIR (read-only filesystem?)"
+
+            # Try Entware fallback
+            if [ -d "/opt/sbin" ] && [ -w "/opt/sbin" ]; then
+                print_warning "Falling back to /opt/sbin (Entware)"
+                INSTALL_DIR="/opt/sbin"
+                CONFIG_DIR="/opt/etc/b4"
+                CONFIG_FILE="${CONFIG_DIR}/b4.json"
+                SERVICE_DIR="/opt/etc/init.d"
+                SERVICE_NAME="S99b4"
+            # Try /tmp fallback (non-persistent but always writable)
+            elif mkdir -p "/tmp/b4" 2>/dev/null; then
+                print_warning "Falling back to /tmp/b4 (non-persistent, will not survive reboot)"
+                INSTALL_DIR="/tmp/b4"
+            else
+                print_error "Failed to create install directory: $INSTALL_DIR"
+                print_error "Filesystem is read-only. Try installing Entware first."
+                exit 1
+            fi
+        fi
+    elif [ ! -w "$INSTALL_DIR" ]; then
+        # Directory exists but is not writable
+        print_warning "$INSTALL_DIR exists but is not writable"
+        if [ -d "/opt/sbin" ] && [ -w "/opt/sbin" ]; then
+            print_warning "Falling back to /opt/sbin (Entware)"
+            INSTALL_DIR="/opt/sbin"
+            CONFIG_DIR="/opt/etc/b4"
+            CONFIG_FILE="${CONFIG_DIR}/b4.json"
+            SERVICE_DIR="/opt/etc/init.d"
+            SERVICE_NAME="S99b4"
+        elif mkdir -p "/tmp/b4" 2>/dev/null; then
+            print_warning "Falling back to /tmp/b4 (non-persistent, will not survive reboot)"
+            INSTALL_DIR="/tmp/b4"
+        else
+            print_error "Failed to find writable install directory"
             exit 1
-        }
+        fi
     fi
 
     # Create config directory
@@ -178,75 +213,108 @@ convert_to_proxy_url() {
     esac
 }
 
+# Check if wget supports HTTPS
+wget_supports_https() {
+    # Try HTTPS HEAD request against multiple endpoints
+    # (github.com may be blocked in some regions)
+    for test_url in "https://proxy.lavrush.in" "https://github.com" "https://cloudflare.com"; do
+        if wget --spider -q --timeout=5 "$test_url" 2>/dev/null; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 # Download file from URL with GitHub fallback
 fetch_file() {
     url="$1"
     output="$2"
+    dl_err=""
 
-    # Try direct GitHub download first
-    if command_exists wget; then
-        if wget -q --timeout=10 -O "$output" "$url" 2>/dev/null; then
-            return 0
-        fi
-    elif command_exists curl; then
-        if curl -sfL --max-time 10 -o "$output" "$url" 2>/dev/null; then
-            return 0
-        fi
-    else
-        print_error "Neither wget nor curl found"
+    if ! command_exists curl && ! command_exists wget; then
+        print_error "Neither curl nor wget found"
         return 1
+    fi
+
+    # Try direct download - try both curl and wget (BusyBox curl may lack SSL)
+    if command_exists curl; then
+        dl_err=$(curl -sfL --max-time 10 -o "$output" "$url" 2>&1) && return 0
+    fi
+    if command_exists wget; then
+        dl_err=$(wget -q $WGET_INSECURE --timeout=10 -O "$output" "$url" 2>&1) && return 0
     fi
 
     # If direct download failed, try proxy fallback
     proxy_url=$(convert_to_proxy_url "$url")
     if [ "$proxy_url" != "$url" ]; then
         print_warning "Direct download failed, trying proxy (proxy.lavrush.in)..."
+        if command_exists curl; then
+            dl_err=$(curl -sfL --max-time 15 -o "$output" "$proxy_url" 2>&1) && return 0
+        fi
         if command_exists wget; then
-            wget -q --timeout=15 -O "$output" "$proxy_url" 2>/dev/null
-            return $?
-        elif command_exists curl; then
-            curl -sfL --max-time 15 -o "$output" "$proxy_url" 2>/dev/null
-            return $?
+            dl_err=$(wget -q $WGET_INSECURE --timeout=15 -O "$output" "$proxy_url" 2>&1) && return 0
         fi
     fi
 
-    print_error "Failed to download file from $url"
+    print_error "Failed to download: $url"
+    [ -n "$dl_err" ] && print_error "Last error: $dl_err"
     return 1
 }
 
 # Fetch URL content to stdout with GitHub fallback
 fetch_stdout() {
     url="$1"
+    dl_err=""
 
-    # Try direct GitHub download first
-    result=""
-    if command_exists wget; then
-        result=$(wget -qO- --timeout=10 "$url" 2>/dev/null)
-        if [ $? -eq 0 ] && [ -n "$result" ]; then
-            echo "$result"
-            return 0
-        fi
-    elif command_exists curl; then
-        result=$(curl -sfL --max-time 10 "$url" 2>/dev/null)
-        if [ $? -eq 0 ] && [ -n "$result" ]; then
-            echo "$result"
-            return 0
-        fi
-    else
+    if ! command_exists curl && ! command_exists wget; then
         return 1
+    fi
+
+    # Try direct download - try both curl and wget (BusyBox curl may lack SSL)
+    if command_exists curl; then
+        result=$(curl -sfL --max-time 10 "$url" 2>/tmp/b4_fetch_err) || true
+        dl_err=$(cat /tmp/b4_fetch_err 2>/dev/null)
+        rm -f /tmp/b4_fetch_err
+        if [ -n "$result" ]; then
+            echo "$result"
+            return 0
+        fi
+    fi
+    if command_exists wget; then
+        result=$(wget -qO- $WGET_INSECURE --timeout=10 "$url" 2>/tmp/b4_fetch_err) || true
+        dl_err=$(cat /tmp/b4_fetch_err 2>/dev/null)
+        rm -f /tmp/b4_fetch_err
+        if [ -n "$result" ]; then
+            echo "$result"
+            return 0
+        fi
     fi
 
     # If direct download failed, try proxy fallback
     proxy_url=$(convert_to_proxy_url "$url")
     if [ "$proxy_url" != "$url" ]; then
-        if command_exists wget; then
-            wget -qO- --timeout=15 "$proxy_url" 2>/dev/null
-        elif command_exists curl; then
-            curl -sfL --max-time 15 "$proxy_url" 2>/dev/null
+        print_warning "Direct download failed, trying proxy (proxy.lavrush.in)..."
+        if command_exists curl; then
+            result=$(curl -sfL --max-time 15 "$proxy_url" 2>/tmp/b4_fetch_err) || true
+            dl_err=$(cat /tmp/b4_fetch_err 2>/dev/null)
+            rm -f /tmp/b4_fetch_err
+            if [ -n "$result" ]; then
+                echo "$result"
+                return 0
+            fi
         fi
-        return $?
+        if command_exists wget; then
+            result=$(wget -qO- $WGET_INSECURE --timeout=15 "$proxy_url" 2>/tmp/b4_fetch_err) || true
+            dl_err=$(cat /tmp/b4_fetch_err 2>/dev/null)
+            rm -f /tmp/b4_fetch_err
+            if [ -n "$result" ]; then
+                echo "$result"
+                return 0
+            fi
+        fi
     fi
 
+    [ -n "$dl_err" ] && print_error "Download error: $dl_err"
     return 1
 }
 
@@ -298,7 +366,7 @@ check_dependencies() {
 
     missing_required=""
 
-    if ! command_exists wget && ! command_exists curl; then
+    if ! command_exists curl && ! command_exists wget; then
         missing_required="${missing_required} wget"
     fi
 
@@ -324,18 +392,151 @@ check_dependencies() {
         fi
     fi
 
+    # Check HTTPS support - critical for downloading from GitHub
+    ensure_https_support
+
     check_recommended_packages
+}
+
+# Check if curl supports HTTPS
+curl_supports_https() {
+    for test_url in "https://ya.ru"; do
+        if curl -sI --max-time 5 "$test_url" >/dev/null 2>&1; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Ensure wget/curl can handle HTTPS (critical for GitHub downloads)
+ensure_https_support() {
+    # If curl exists with SSL, we're fine
+    if command_exists curl; then
+        if curl_supports_https; then
+            return 0
+        fi
+    fi
+
+    # Check if wget supports HTTPS
+    if command_exists wget; then
+        if wget_supports_https; then
+            return 0
+        fi
+    fi
+
+    # Neither wget nor curl can do HTTPS
+    print_warning "HTTPS support not available (required for GitHub downloads)"
+
+    # Try to install wget-ssl and ca-certificates on Entware/OpenWrt
+    if command_exists opkg; then
+        print_info "Attempting to install wget-ssl and ca-certificates for HTTPS support..."
+        if [ "$QUIET_MODE" = "1" ]; then
+            opkg update >/dev/null 2>&1 || true
+            opkg install ca-certificates >/dev/null 2>&1 || true
+            opkg install wget-ssl >/dev/null 2>&1 || true
+        else
+            printf "${CYAN}Install wget-ssl and ca-certificates for HTTPS support? (Y/n): ${NC}"
+            read answer </dev/tty || answer="y"
+            case "$answer" in
+            [nN] | [nN][oO]) ;;
+            *)
+                opkg update >/dev/null 2>&1 || true
+                if opkg install ca-certificates >/dev/null 2>&1; then
+                    print_success "ca-certificates installed"
+                else
+                    print_warning "Failed to install ca-certificates"
+                fi
+                if opkg install wget-ssl >/dev/null 2>&1; then
+                    print_success "wget-ssl installed"
+                else
+                    print_warning "Failed to install wget-ssl"
+                fi
+                # Rehash PATH to pick up new binary
+                hash -r 2>/dev/null || true
+                ;;
+            esac
+        fi
+
+        # Verify HTTPS now works
+        if command_exists wget && wget_supports_https; then
+            return 0
+        fi
+        if command_exists curl && curl_supports_https; then
+            return 0
+        fi
+    fi
+
+    # Last resort: try --no-check-certificate (missing CA certs but SSL works)
+    if command_exists wget; then
+        if wget --spider -q --timeout=5 --no-check-certificate "https://github.com" 2>/dev/null; then
+            print_warning "HTTPS works only with --no-check-certificate (CA certificates missing)"
+            print_info "Install CA certificates: opkg install ca-certificates"
+            WGET_INSECURE="--no-check-certificate"
+            return 0
+        fi
+    fi
+
+    print_warning "HTTPS may not work - downloads from GitHub might fail"
+    print_info "On Entware/Keenetic: opkg install wget-ssl ca-certificates"
+    print_info "On OpenWrt: opkg install wget-ssl ca-certificates"
+}
+
+# Map kernel module package name to the actual module name for lsmod check
+kmod_to_module() {
+    case "$1" in
+    kmod-nfnetlink-queue) echo "nfnetlink_queue" ;;
+    kmod-ipt-nfqueue) echo "xt_NFQUEUE" ;;
+    kmod-ipt-raw) echo "iptable_raw" ;;
+    kmod-ipt-ipset) echo "ip_set" ;;
+    kmod-nft-core | kmod-nft-base) echo "nf_tables" ;;
+    kmod-nft-queue) echo "nft_queue" ;;
+    kmod-nf-conntrack-netlink) echo "nf_conntrack_netlink" ;;
+    iptables-mod-nfqueue) echo "xt_NFQUEUE" ;;
+    *) echo "" ;;
+    esac
+}
+
+# Check if a kernel module package is actually needed
+# Returns 0 (needed) or 1 (not needed / already loaded)
+kmod_pkg_needed() {
+    pkg="$1"
+    mod=$(kmod_to_module "$pkg")
+    [ -z "$mod" ] && return 0
+    # Module already loaded - no need for the package
+    lsmod 2>/dev/null | grep -q "^${mod}" && return 1
+    return 0
 }
 
 check_recommended_packages() {
     case "$SYSTEM_TYPE" in
     openwrt)
-        recommended="kmod-nft-queue kmod-nf-conntrack-netlink iptables-mod-nfqueue jq wget-ssl coreutils-nohup"
+        # Userspace packages always recommended
+        recommended="jq wget-ssl coreutils-nohup"
+        # Kernel module packages - only recommend if the module isn't already loaded
+        kmod_packages="kmod-nfnetlink-queue kmod-ipt-nfqueue kmod-ipt-raw kmod-ipt-ipset kmod-nft-core kmod-nft-queue kmod-nf-conntrack-netlink iptables-mod-nfqueue"
         pkg_cmd="opkg"
         ;;
     entware | merlin)
-        recommended="jq coreutils-nohup iptables"
+        recommended="ca-certificates curl wget-ssl jq coreutils-nohup iptables"
+        kmod_packages=""
         pkg_cmd="opkg"
+        ;;
+    padavan)
+        # If Entware is available, use opkg
+        if command_exists opkg; then
+            recommended="ca-certificates curl wget-ssl jq coreutils-nohup iptables"
+            kmod_packages=""
+            pkg_cmd="opkg"
+        else
+            missing=""
+            for cmd in jq nohup; do
+                command_exists "$cmd" || missing="${missing} $cmd"
+            done
+            [ -z "$missing" ] && return 0
+            print_warning "Recommended but missing:$missing"
+            print_warning "Install Entware to get a package manager: https://github.com/Entware/Entware/wiki"
+            return 0
+        fi
         ;;
     systemd-linux | sysv-linux | generic-linux)
         missing=""
@@ -364,9 +565,21 @@ check_recommended_packages() {
         ;;
     esac
 
+    # Check which userspace packages are missing
     missing=""
     for pkg in $recommended; do
         $pkg_cmd list-installed 2>/dev/null | grep -q "^${pkg} " || missing="${missing} $pkg"
+    done
+
+    # Check kernel module packages: skip if module already loaded or package not in repo
+    for pkg in $kmod_packages; do
+        # Skip if already installed
+        $pkg_cmd list-installed 2>/dev/null | grep -q "^${pkg} " && continue
+        # Skip if the kernel module is already loaded (built-in or loaded by firmware)
+        kmod_pkg_needed "$pkg" || continue
+        # Skip if the package doesn't exist in the repo
+        $pkg_cmd list "$pkg" 2>/dev/null | grep -q "^${pkg} " || continue
+        missing="${missing} $pkg"
     done
 
     [ -z "$missing" ] && return 0

@@ -96,6 +96,20 @@ func (cfg *Config) ApplyLogLevel(level string) {
 func (c *Config) Validate() error {
 	c.System.WebServer.IsEnabled = c.System.WebServer.Port > 0 && c.System.WebServer.Port <= 65535
 
+	hasCert := c.System.WebServer.TLSCert != ""
+	hasKey := c.System.WebServer.TLSKey != ""
+	if hasCert != hasKey {
+		return fmt.Errorf("both tls_cert and tls_key must be specified together")
+	}
+	if hasCert {
+		if _, err := os.Stat(c.System.WebServer.TLSCert); err != nil {
+			return fmt.Errorf("TLS certificate file not found: %s", c.System.WebServer.TLSCert)
+		}
+		if _, err := os.Stat(c.System.WebServer.TLSKey); err != nil {
+			return fmt.Errorf("TLS key file not found: %s", c.System.WebServer.TLSKey)
+		}
+	}
+
 	c.MainSet = nil
 	for _, set := range c.Sets {
 		if set.Id == MAIN_SET_ID {
@@ -107,6 +121,7 @@ func (c *Config) Validate() error {
 	if c.MainSet == nil {
 		defaultCopy := NewSetConfig()
 		c.MainSet = &defaultCopy
+		c.Sets = append(c.Sets, c.MainSet)
 	}
 
 	for _, set := range c.Sets {
@@ -117,6 +132,18 @@ func (c *Config) Validate() error {
 				s = strings.TrimPrefix(s, "0x")
 				b, _ := strconv.ParseUint(s, 16, 8)
 				set.Fragmentation.SeqOverlapBytes[i] = byte(b)
+			}
+		}
+
+		if set.TCP.Duplicate.Enabled {
+			if set.TCP.Duplicate.Count < 1 {
+				set.TCP.Duplicate.Count = 1
+			}
+			if set.TCP.Duplicate.Count > 10 {
+				set.TCP.Duplicate.Count = 10
+			}
+			if len(set.Targets.IPs) == 0 && len(set.Targets.GeoIpCategories) == 0 {
+				log.Warnf("Set '%s' has duplication enabled but no IP targets configured", set.Name)
 			}
 		}
 
@@ -371,6 +398,28 @@ func (cfg *Config) CollectUDPPorts() []string {
 	sort.Strings(ports)
 	ports = mergeAndNormalizePorts(ports)
 	return ports
+}
+
+// CollectDuplicateIPs returns IPv4 and IPv6 IPs/CIDRs from sets with duplication enabled.
+// Used for firewall rules that queue packets without connbytes limit.
+func (cfg *Config) CollectDuplicateIPs() (ipv4 []string, ipv6 []string) {
+	for _, set := range cfg.Sets {
+		if !set.Enabled || !set.TCP.Duplicate.Enabled {
+			continue
+		}
+		for _, ipStr := range set.Targets.IpsToMatch {
+			ipStr = strings.TrimSpace(ipStr)
+			if ipStr == "" {
+				continue
+			}
+			if strings.Contains(ipStr, ":") {
+				ipv6 = append(ipv6, ipStr)
+			} else {
+				ipv4 = append(ipv4, ipStr)
+			}
+		}
+	}
+	return
 }
 
 func (c *Config) Clone() *Config {

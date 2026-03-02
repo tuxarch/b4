@@ -15,6 +15,8 @@ export interface GeodatDownloadResult {
   message: string;
   geosite_path: string;
   geoip_path: string;
+  geosite_size: number;
+  geoip_size: number;
 }
 
 export interface SystemInfo {
@@ -22,6 +24,7 @@ export interface SystemInfo {
   os: string;
   arch: string;
   can_restart: boolean;
+  is_docker: boolean;
 }
 
 export interface RestartResponse {

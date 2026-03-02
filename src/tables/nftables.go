@@ -12,8 +12,10 @@ import (
 )
 
 const (
-	nftTableName = "b4_mangle"
-	nftChainName = "b4_chain"
+	nftTableName    = "b4_mangle"
+	nftChainName    = "b4_chain"
+	nftNatTableName = "b4_nat"
+	nftNatChainName = "b4_masq"
 )
 
 type NFTablesManager struct {
@@ -200,6 +202,35 @@ func (n *NFTablesManager) Apply() error {
 		return err
 	}
 
+	// Duplication rules: queue ALL TCP/443 packets to specific IPs (no connbytes limit).
+	// Must come before the generic connbytes-limited rules.
+	dupIPv4, dupIPv6 := cfg.CollectDuplicateIPs()
+	queueAction := strings.Fields(n.buildNFQueueAction())
+	if len(dupIPv4) > 0 && cfg.Queue.IPv4Enabled {
+		var ipExpr string
+		if len(dupIPv4) == 1 {
+			ipExpr = dupIPv4[0]
+		} else {
+			ipExpr = "{ " + strings.Join(dupIPv4, ", ") + " }"
+		}
+		args := append([]string{"meta", "nfproto", "ipv4", "ip", "daddr", ipExpr, "tcp", "dport", "443", "counter"}, queueAction...)
+		if err := n.addRule(nftChainName, args...); err != nil {
+			return err
+		}
+	}
+	if len(dupIPv6) > 0 && cfg.Queue.IPv6Enabled {
+		var ipExpr string
+		if len(dupIPv6) == 1 {
+			ipExpr = dupIPv6[0]
+		} else {
+			ipExpr = "{ " + strings.Join(dupIPv6, ", ") + " }"
+		}
+		args := append([]string{"meta", "nfproto", "ipv6", "ip6", "daddr", ipExpr, "tcp", "dport", "443", "counter"}, queueAction...)
+		if err := n.addRule(nftChainName, args...); err != nil {
+			return err
+		}
+	}
+
 	tcpLimit := fmt.Sprintf("%d", cfg.MainSet.TCP.ConnBytesLimit+1)
 	udpLimit := fmt.Sprintf("%d", cfg.MainSet.UDP.ConnBytesLimit+1)
 
@@ -237,6 +268,10 @@ func (n *NFTablesManager) Apply() error {
 	setSysctlOrProc("net.netfilter.nf_conntrack_checksum", "0")
 	setSysctlOrProc("net.netfilter.nf_conntrack_tcp_be_liberal", "1")
 
+	if err := n.ApplyMasquerade(); err != nil {
+		return err
+	}
+
 	if log.Level(log.CurLevel.Load()) >= log.LevelTrace {
 		out, _ := n.runNft("list", "table", "inet", nftTableName)
 		log.Tracef("Current nftables rules:\n%s", out)
@@ -252,6 +287,8 @@ func (n *NFTablesManager) Clear() error {
 
 	log.Tracef("NFTABLES: clearing rules")
 
+	n.ClearMasquerade()
+
 	if n.tableExists() {
 		if _, err := n.runNft("flush", "table", "inet", nftTableName); err != nil {
 			log.Errorf("Failed to flush nftables table: %v", err)
@@ -263,4 +300,64 @@ func (n *NFTablesManager) Clear() error {
 	}
 
 	return nil
+}
+
+func (n *NFTablesManager) natTableExists() bool {
+	out, err := n.runNft("list", "tables")
+	if err != nil {
+		return false
+	}
+	return strings.Contains(out, nftNatTableName)
+}
+
+func (n *NFTablesManager) ApplyMasquerade() error {
+	if !n.cfg.System.Tables.Masquerade {
+		return nil
+	}
+
+	log.Tracef("NFTABLES: adding masquerade rules")
+
+	if !n.natTableExists() {
+		if _, err := n.runNft("add", "table", "ip", nftNatTableName); err != nil {
+			return fmt.Errorf("failed to create nftables nat table: %w", err)
+		}
+	}
+
+	chainCmd := []string{"add", "chain", "ip", nftNatTableName, nftNatChainName,
+		"{ type nat hook postrouting priority srcnat ; policy accept ; }"}
+	if _, err := n.runNft(chainCmd...); err != nil {
+		return fmt.Errorf("failed to create nat postrouting chain: %w", err)
+	}
+
+	ruleArgs := []string{"add", "rule", "ip", nftNatTableName, nftNatChainName}
+	if iface := n.cfg.System.Tables.MasqueradeInterface; iface != "" {
+		ruleArgs = append(ruleArgs, "oifname", fmt.Sprintf("%q", iface))
+	}
+	ruleArgs = append(ruleArgs, "masquerade")
+
+	if _, err := n.runNft(ruleArgs...); err != nil {
+		return fmt.Errorf("failed to add masquerade rule: %w", err)
+	}
+
+	iface := n.cfg.System.Tables.MasqueradeInterface
+	if iface == "" {
+		iface = "all"
+	}
+	log.Infof("NFTABLES: masquerade enabled (interface: %s)", iface)
+	return nil
+}
+
+func (n *NFTablesManager) ClearMasquerade() {
+	if !n.natTableExists() {
+		return
+	}
+
+	log.Tracef("NFTABLES: clearing masquerade rules")
+	if _, err := n.runNft("flush", "table", "ip", nftNatTableName); err != nil {
+		log.Errorf("Failed to flush nftables nat table: %v", err)
+	}
+	time.Sleep(30 * time.Millisecond)
+	if _, err := n.runNft("delete", "table", "ip", nftNatTableName); err != nil {
+		log.Errorf("Failed to delete nftables nat table: %v", err)
+	}
 }

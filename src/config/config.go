@@ -65,6 +65,11 @@ var DefaultSetConfig = SetConfig{
 			FakeCount: 3,
 			Strategy:  "badsum",
 		},
+
+		Duplicate: DuplicateConfig{
+			Enabled: false,
+			Count:   3,
+		},
 	},
 
 	DNS: DNSConfig{
@@ -146,6 +151,7 @@ var DefaultConfig = Config{
 		Interfaces:  []string{},
 		Devices: DevicesConfig{
 			Enabled:      false,
+			VendorLookup: false,
 			WhiteIsBlack: false,
 			Mac:          []string{},
 		},
@@ -164,14 +170,24 @@ var DefaultConfig = Config{
 		},
 
 		Tables: TablesConfig{
-			MonitorInterval: 10,
-			SkipSetup:       false,
+			MonitorInterval:     10,
+			SkipSetup:           false,
+			Masquerade:          false,
+			MasqueradeInterface: "",
 		},
 
 		WebServer: WebServerConfig{
 			Port:        7000,
 			BindAddress: "0.0.0.0",
 			IsEnabled:   true,
+		},
+
+		Socks5: Socks5Config{
+			Enabled:        false,
+			Port:           1080,
+			BindAddress:    "0.0.0.0",
+			UDPTimeout:     300,
+			UDPReadTimeout: 5,
 		},
 
 		Logging: Logging{

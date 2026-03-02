@@ -276,7 +276,28 @@ func (manager *IPTablesManager) buildManifest() (Manifest, error) {
 			Rule{manager: manager, IPT: ipt, Table: "mangle", Chain: "PREROUTING", Action: "I", Spec: dnsResponseSpec},
 			Rule{manager: manager, IPT: ipt, Table: "mangle", Chain: "PREROUTING", Action: "I", Spec: tcpResponseSpec},
 			Rule{manager: manager, IPT: ipt, Table: "mangle", Chain: "PREROUTING", Action: "I", Spec: synackSpec},
+		)
 
+		// Duplication rules: queue ALL TCP/443 to specific IPs (no connbytes limit).
+		// Must come before the generic connbytes-limited TCP rule.
+		dupIPv4, dupIPv6 := cfg.CollectDuplicateIPs()
+		var dupIPs []string
+		if ipt == "iptables" {
+			dupIPs = dupIPv4
+		} else {
+			dupIPs = dupIPv6
+		}
+		for _, cidr := range dupIPs {
+			dupSpec := append(
+				[]string{"-p", "tcp", "-d", cidr, "--dport", "443"},
+				manager.buildNFQSpec(queueNum, threads)...,
+			)
+			rules = append(rules,
+				Rule{manager: manager, IPT: ipt, Table: "mangle", Chain: chainName, Action: "A", Spec: dupSpec},
+			)
+		}
+
+		rules = append(rules,
 			Rule{manager: manager, IPT: ipt, Table: "mangle", Chain: chainName, Action: "A", Spec: tcpSpec},
 			Rule{manager: manager, IPT: ipt, Table: "mangle", Chain: chainName, Action: "A", Spec: dnsSpec},
 		)
@@ -355,6 +376,18 @@ func (manager *IPTablesManager) buildManifest() (Manifest, error) {
 			Rule{manager: manager, IPT: ipt, Table: "mangle", Chain: "OUTPUT", Action: "A",
 				Spec: []string{"-j", chainName}},
 		)
+	}
+
+	if cfg.System.Tables.Masquerade {
+		for _, ipt := range ipts {
+			masqSpec := []string{"-j", "MASQUERADE"}
+			if iface := cfg.System.Tables.MasqueradeInterface; iface != "" {
+				masqSpec = []string{"-o", iface, "-j", "MASQUERADE"}
+			}
+			rules = append(rules,
+				Rule{manager: manager, IPT: ipt, Table: "nat", Chain: "POSTROUTING", Action: "A", Spec: masqSpec},
+			)
+		}
 	}
 
 	sysctls := []SysctlSetting{
@@ -508,6 +541,22 @@ func (ipt *IPTablesManager) clearB4JumpRules() {
 			_, err := run(iptBin, "-w", "-t", "mangle", "-D", "OUTPUT", "-j", "B4")
 			if err != nil {
 				break
+			}
+		}
+
+		// Clean nat POSTROUTING masquerade rules
+		for {
+			_, err := run(iptBin, "-w", "-t", "nat", "-D", "POSTROUTING", "-j", "MASQUERADE")
+			if err != nil {
+				break
+			}
+		}
+		if iface := ipt.cfg.System.Tables.MasqueradeInterface; iface != "" {
+			for {
+				_, err := run(iptBin, "-w", "-t", "nat", "-D", "POSTROUTING", "-o", iface, "-j", "MASQUERADE")
+				if err != nil {
+					break
+				}
 			}
 		}
 	}

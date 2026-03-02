@@ -26,15 +26,15 @@ import {
 import { colors } from "@design";
 import { B4SetConfig } from "@models/config";
 import { DiscoveryAddDialog } from "./AddDialog";
-import { B4Alert, B4Badge, B4Section, B4TextField } from "@b4.elements";
+import { B4Alert, B4Badge, B4Section, B4TextField, B4ChipList, B4PlusButton } from "@b4.elements";
 import { useSnackbar } from "@context/SnackbarProvider";
 import { DiscoveryLogPanel } from "./LogPanel";
+import { useDiscovery } from "@hooks/useDiscovery";
 import {
-  useDiscovery,
   StrategyFamily,
   DiscoveryPhase,
   DomainPresetResult,
-} from "@b4.discovery";
+} from "@models/discovery";
 import { useSets } from "@hooks/useSets";
 import { useCaptures } from "@b4.capture";
 import { DiscoveryOptionsPanel, DiscoveryOptions } from "./Options";
@@ -62,6 +62,7 @@ const familyNames: Record<StrategyFamily, string> = {
 
 const phaseNames: Record<DiscoveryPhase, string> = {
   baseline: "Baseline Test",
+  cached: "Cached Strategies",
   strategy_detection: "Strategy Detection",
   optimization: "Optimization",
   combination: "Combination Test",
@@ -74,6 +75,7 @@ export const DiscoveryRunner = () => {
     cancelDiscovery,
     resetDiscovery,
     addPresetAsSet,
+    clearCache,
     discoveryRunning: running,
     suiteId,
     suite,
@@ -90,8 +92,10 @@ export const DiscoveryRunner = () => {
   const { captures, loadCaptures } = useCaptures();
   const [options, setOptions] = useState<DiscoveryOptions>(() => ({
     skipDNS: localStorage.getItem("b4_discovery_skipdns") === "true",
+    skipCache: localStorage.getItem("b4_discovery_skipcache") === "true",
     payloadFiles: [],
-    validationTries: parseInt(localStorage.getItem("b4_discovery_validation_tries") || "1") || 1,
+    validationTries: Number.parseInt(localStorage.getItem("b4_discovery_validation_tries") || "1") || 1,
+    tlsVersion: (localStorage.getItem("b4_discovery_tls_version") as DiscoveryOptions["tlsVersion"]) || "auto",
   }));
 
   useEffect(() => {
@@ -103,9 +107,19 @@ export const DiscoveryRunner = () => {
   }, [options.skipDNS]);
 
   useEffect(() => {
+    localStorage.setItem("b4_discovery_skipcache", String(options.skipCache));
+  }, [options.skipCache]);
+
+  useEffect(() => {
     localStorage.setItem("b4_discovery_validation_tries", String(options.validationTries));
   }, [options.validationTries]);
-  const [checkUrl, setCheckUrl] = useState("");
+
+  useEffect(() => {
+    localStorage.setItem("b4_discovery_tls_version", options.tlsVersion);
+  }, [options.tlsVersion]);
+
+  const [checkUrls, setCheckUrls] = useState<string[]>([]);
+  const [urlInput, setUrlInput] = useState("");
 
   const [addingPreset, setAddingPreset] = useState(false);
   const [addDialog, setAddDialog] = useState<{
@@ -126,10 +140,14 @@ export const DiscoveryRunner = () => {
   }, [loadCaptures]);
 
   const handleAddStrategy = (domain: string, result: DomainPresetResult) => {
+    let presetName = result.preset_name;
+    if (options.tlsVersion === "tls12") presetName += "-tls12";
+    else if (options.tlsVersion === "tls13") presetName += "-tls13";
+
     setAddDialog({
       open: true,
       domain,
-      presetName: result.preset_name,
+      presetName,
       setConfig: result.set || null,
     });
   };
@@ -145,15 +163,64 @@ export const DiscoveryRunner = () => {
     });
   };
 
-  const handleDomainKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.key !== "Enter") return;
-      if (!checkUrl.trim()) return;
-      e.preventDefault();
-      void startDiscovery(checkUrl, options.skipDNS, options.payloadFiles, options.validationTries);
+  const extractDomain = (url: string): string => {
+    try {
+      const withProto = url.includes("://") ? url : `https://${url}`;
+      return new URL(withProto).hostname;
+    } catch {
+      return url.split("/")[0];
+    }
+  };
+
+  const addUrls = useCallback(
+    (raw: string) => {
+      const parts = raw
+        .split(/[\n,]+/)
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0);
+      if (parts.length === 0) return;
+      setCheckUrls((prev) => {
+        const existing = new Set(prev);
+        const next = [...prev];
+        for (const url of parts) {
+          if (!existing.has(url)) {
+            existing.add(url);
+            next.push(url);
+          }
+        }
+        return next;
+      });
+      setUrlInput("");
     },
-    [checkUrl, options, startDiscovery]
+    []
   );
+
+  const handleUrlKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "Enter" || e.key === "Tab" || e.key === ",") {
+        if (urlInput.trim()) {
+          e.preventDefault();
+          addUrls(urlInput);
+        }
+      }
+    },
+    [urlInput, addUrls]
+  );
+
+  const handleUrlPaste = useCallback(
+    (e: React.ClipboardEvent) => {
+      const text = e.clipboardData.getData("text");
+      if (text.includes("\n") || text.includes(",")) {
+        e.preventDefault();
+        addUrls(text);
+      }
+    },
+    [addUrls]
+  );
+
+  const removeUrl = useCallback((url: string) => {
+    setCheckUrls((prev) => prev.filter((u) => u !== url));
+  }, []);
 
   const handleAddNew = async (name: string, domain: string) => {
     if (!addDialog.setConfig) return;
@@ -203,6 +270,7 @@ export const DiscoveryRunner = () => {
   const groupResultsByPhase = (results: Record<string, DomainPresetResult>) => {
     const grouped: Record<DiscoveryPhase, DomainPresetResult[]> = {
       baseline: [],
+      cached: [],
       strategy_detection: [],
       optimization: [],
       combination: [],
@@ -232,17 +300,22 @@ export const DiscoveryRunner = () => {
           configurations and measure their performance.
         </B4Alert>
 
-        {/* Header with actions */}
-        <Box sx={{ display: "flex", gap: 2, alignItems: "flex-start" }}>
+        {/* URL input with chips */}
+        <Box sx={{ display: "flex", gap: 1, alignItems: "flex-start" }}>
           <B4TextField
-            label="Domain or URL to test"
-            value={checkUrl}
-            onChange={(e) => setCheckUrl(e.target.value)}
-            onKeyDown={handleDomainKeyDown}
+            label="Add domain or URL"
+            value={urlInput}
+            onChange={(e) => setUrlInput(e.target.value)}
+            onKeyDown={handleUrlKeyDown}
+            onPaste={handleUrlPaste}
             inputRef={domainInputRef}
-            placeholder="youtube.com or https://youtube.com/some/path"
+            placeholder="youtube.com, https://discord.com/path"
             disabled={running || !!isReconnecting}
-            helperText="Enter a domain or full URL to discover optimal bypass configuration"
+            helperText="Press Enter to add. Paste multiple URLs separated by commas or newlines."
+          />
+          <B4PlusButton
+            onClick={() => addUrls(urlInput)}
+            disabled={!urlInput.trim() || running || !!isReconnecting}
           />
           <Box sx={{ flexShrink: 0 }}>
             {!running && !suite && (
@@ -251,13 +324,15 @@ export const DiscoveryRunner = () => {
                 variant="contained"
                 onClick={() => {
                   void startDiscovery(
-                    checkUrl,
+                    checkUrls,
                     options.skipDNS,
+                    options.skipCache,
                     options.payloadFiles,
-                    options.validationTries
+                    options.validationTries,
+                    options.tlsVersion
                   );
                 }}
-                disabled={!checkUrl.trim()}
+                disabled={checkUrls.length === 0}
                 sx={{
                   whiteSpace: "nowrap",
                 }}
@@ -294,9 +369,26 @@ export const DiscoveryRunner = () => {
             )}
           </Box>
         </Box>
+        {!running && !suite && (
+          <B4ChipList
+            items={checkUrls}
+            getKey={(url) => url}
+            getLabel={(url) => extractDomain(url)}
+            onDelete={removeUrl}
+            emptyMessage="No URLs added yet"
+            showEmpty
+          />
+        )}
         <DiscoveryOptionsPanel
           options={options}
           onChange={setOptions}
+          onClearCache={() => {
+            void (async () => {
+              const res = await clearCache();
+              if (res.success) showSuccess("Discovery cache cleared");
+              else showError("Failed to clear cache");
+            })();
+          }}
           captures={captures}
           disabled={running || !!isReconnecting}
         />
@@ -329,11 +421,20 @@ export const DiscoveryRunner = () => {
                   {suite.current_phase === "dns_detection"
                     ? "Checking DNS..."
                     : `${suite.completed_checks} of ${suite.total_checks} checks`}
+                  {suite.current_domain && (
+                    <B4Badge
+                      label={suite.current_domain}
+                      size="small"
+                      variant="outlined"
+                      color="primary"
+                      sx={{ ml: 1 }}
+                    />
+                  )}
                 </Typography>
               </Box>
               {suite.current_phase !== "dns_detection" && (
                 <Typography variant="body2" color="text.secondary">
-                  {isNaN(progress) ? "0" : progress.toFixed(0)}%
+                  {Number.isNaN(progress) ? "0" : progress.toFixed(0)}%
                 </Typography>
               )}
             </Box>
@@ -581,6 +682,7 @@ export const DiscoveryRunner = () => {
                         {/* Results by Phase */}
                         {(
                           [
+                            "cached",
                             "baseline",
                             "strategy_detection",
                             "optimization",

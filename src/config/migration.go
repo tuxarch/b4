@@ -33,6 +33,45 @@ var migrationRegistry = map[int]MigrationFunc{
 	14: migrateV14to15, // Flatten TCP desync settings into nested struct
 	15: migrateV15to16, // Add TCP Incoming config
 	16: migrateV16to17,
+	17: migrateV17to18, // Add TCP packet duplication config
+	18: migrateV18to19, // Add TLS certificate/key to web server config
+	19: migrateV19to20, // Add vendor lookup option to devices config
+	20: migrateV20to21, // Add SOCKS5 proxy server config
+	21: migrateV21to22, // Add NAT masquerade config
+}
+
+func migrateV21to22(c *Config, _ map[string]interface{}) error {
+	log.Tracef("Migration v21->v22: Adding NAT masquerade config")
+	c.System.Tables.Masquerade = DefaultConfig.System.Tables.Masquerade
+	c.System.Tables.MasqueradeInterface = DefaultConfig.System.Tables.MasqueradeInterface
+	return nil
+}
+
+func migrateV20to21(c *Config, _ map[string]interface{}) error {
+	log.Tracef("Migration v20->v21: Adding SOCKS5 proxy server config")
+	c.System.Socks5 = DefaultConfig.System.Socks5
+	return nil
+}
+
+func migrateV19to20(c *Config, _ map[string]interface{}) error {
+	log.Tracef("Migration v19->v20: Adding vendor lookup option to devices config")
+	c.Queue.Devices.VendorLookup = false
+	return nil
+}
+
+func migrateV18to19(c *Config, _ map[string]interface{}) error {
+	log.Tracef("Migration v18->v19: Adding TLS certificate/key fields to web server config")
+	// TLS fields default to empty strings (TLS disabled), no action needed
+	return nil
+}
+
+func migrateV17to18(c *Config, _ map[string]interface{}) error {
+	log.Tracef("Migration v17->v18: Adding TCP packet duplication config")
+
+	for _, set := range c.Sets {
+		set.TCP.Duplicate = DefaultSetConfig.TCP.Duplicate
+	}
+	return nil
 }
 
 func migrateV16to17(c *Config, _ map[string]interface{}) error {
