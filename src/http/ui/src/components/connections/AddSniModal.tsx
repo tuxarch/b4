@@ -1,6 +1,15 @@
 import { useEffect, useState } from "react";
 
-import { Button, Group, Modal, Radio, Select, Stack, Text } from "@mantine/core";
+import {
+  Badge,
+  Button,
+  Group,
+  Modal,
+  Radio,
+  Select,
+  Stack,
+  Text,
+} from "@mantine/core";
 import { B4SetConfig, MAIN_SET_ID } from "@models/config";
 
 interface AddSniModalProps {
@@ -38,7 +47,9 @@ export const AddSniModal = ({
   return (
     <Modal opened={opened} onClose={onClose} title="Add Domain" centered>
       <Stack>
-        <Text size="sm">Original domain: {domain}</Text>
+        <Text size="sm">
+          Original domain: <Badge variant="light">{domain}</Badge>
+        </Text>
         {sets.length > 0 && (
           <Select
             label="Add to set"

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { ParsedLog } from "@b4.connections";
-import { Badge, Center, Group, TextInput } from "@mantine/core";
+import { Badge, Card, Center, Group, TextInput } from "@mantine/core";
 import { useElementSize, useLocalStorage } from "@mantine/hooks";
 import { DataTable, DataTableSortStatus } from "mantine-datatable";
 
@@ -88,12 +88,16 @@ const TableRowMemo = memo<{
 
   return (
     <>
-      <TextInput
-        placeholder="Search (combine with +, exclude with !, e.g. tcp+!domain:google.com)"
-        value={search}
-        onChange={handleSearchChange}
-        ref={ref}
-      />
+      <Card>
+        <Group justify="space-between">
+          <TextInput
+            placeholder="Search (combine with +, exclude with !, e.g. tcp+!domain:google.com)"
+            value={search}
+            onChange={handleSearchChange}
+            ref={ref}
+          />
+        </Group>
+      </Card>
       <DataTable
         columns={[
           {
@@ -140,20 +144,21 @@ const TableRowMemo = memo<{
         ]}
         records={records}
         noRecordsText="No connections yet..."
-        height={`calc(100dvh - var(--app-shell-header-height) - 2 * var(--mantine-spacing-md) - ${height}px)`}
         scrollViewportRef={viewport}
         sortStatus={sortStatus}
         onSortStatusChange={setSortStatus}
         onCellClick={({ record, column }) => {
           if (!record.hostSet) {
             if (column.accessor === "domain") onDomainClick(record.domain);
-            if (column.accessor === "destination") onIpClick(record.destination);
+            if (column.accessor === "destination")
+              onIpClick(record.destination);
           }
         }}
         textSelectionDisabled
         highlightOnHover
         withTableBorder
         withColumnBorders
+        height={`calc(100dvh - var(--app-shell-header-height) - 2 * var(--mantine-spacing-md) - ${height}px)`}
       />
     </>
   );

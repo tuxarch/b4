@@ -130,7 +130,6 @@ export const AddIpModal = ({
         {ipInfo?.hostname && onAddHostname && (
           <Button
             variant="subtle"
-            size="xs"
             onClick={() => {
               onAddHostname(ipInfo.hostname!);
               onClose();
