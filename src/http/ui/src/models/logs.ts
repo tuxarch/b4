@@ -1,6 +1,6 @@
 export interface ParsedLog {
   timestamp: string;
-  protocol: "TCP" | "UDP";
+  protocol: "TCP" | "UDP" | "P-TCP" | "P-UDP";
   hostSet: string;
   ipSet: string;
   domain: string;

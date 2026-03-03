@@ -1,50 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Box,
-  Container,
-  IconButton,
-  Paper,
-  Stack,
-  Typography,
-} from "@mui/material";
-import { ClearIcon } from "@b4.icons";
-import { B4Badge, B4TextField, B4Switch, B4TooltipButton } from "@b4.elements";
-import { ArrowDownIcon } from "@b4.icons";
+
+import { IconDelete } from "@b4.icons";
 import { useWebSocket } from "@context/B4WsProvider";
-import { useSnackbar } from "@context/SnackbarProvider";
+import {
+  ActionIcon,
+  Badge,
+  Card,
+  Group,
+  Switch,
+  TextInput,
+} from "@mantine/core";
+import { useElementSize } from "@mantine/hooks";
+import { DataTable } from "mantine-datatable";
 
 export function LogsPage() {
-  const { showSuccess } = useSnackbar();
   const [filter, setFilter] = useState("");
-  const [autoScroll, setAutoScroll] = useState(true);
-  const [showScrollBtn, setShowScrollBtn] = useState(false);
-  const logRef = useRef<HTMLDivElement | null>(null);
   const { logs, pauseLogs, setPauseLogs, clearLogs } = useWebSocket();
-
-  useEffect(() => {
-    const el = logRef.current;
-    if (el && autoScroll) {
-      el.scrollTop = el.scrollHeight;
-    }
-  }, [logs, autoScroll]);
-
-  const handleScroll = () => {
-    const el = logRef.current;
-    if (el) {
-      const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
-      setAutoScroll(isAtBottom);
-      setShowScrollBtn(!isAtBottom);
-    }
-  };
-
-  const scrollToBottom = () => {
-    const el = logRef.current;
-    if (el) {
-      el.scrollTop = el.scrollHeight;
-      setAutoScroll(true);
-      setShowScrollBtn(false);
-    }
-  };
 
   const filtered = useMemo(() => {
     const f = filter.trim().toLowerCase();
@@ -65,14 +36,12 @@ export function LogsPage() {
       if ((e.ctrlKey && e.key === "x") || e.key === "Delete") {
         e.preventDefault();
         clearLogs();
-        showSuccess("Logs cleared");
       } else if (e.key === "p" || e.key === "Pause") {
         e.preventDefault();
         setPauseLogs(!pauseLogs);
-        showSuccess(`Logs ${!pauseLogs ? "paused" : "resumed"}`);
       }
     },
-    [clearLogs, pauseLogs, setPauseLogs, showSuccess]
+    [clearLogs, pauseLogs, setPauseLogs],
   );
 
   useEffect(() => {
@@ -81,155 +50,67 @@ export function LogsPage() {
       globalThis.window.removeEventListener("keydown", handleHotkeysDown);
     };
   }, [handleHotkeysDown]);
+  const { ref, height } = useElementSize();
 
+  const viewport = useRef<HTMLDivElement>(null);
+  const wasAtBottom = useRef(true);
+  useEffect(() => {
+    const el = viewport.current;
+    if (!el) return;
+    const handler = () => {
+      wasAtBottom.current = el.scrollTop + el.clientHeight >= el.scrollHeight;
+    };
+    el.addEventListener("scroll", handler);
+    return () => el.removeEventListener("scroll", handler);
+  }, []);
+
+  useEffect(() => {
+    if (wasAtBottom.current) {
+      scrollToBottom();
+    }
+  }, [filtered]);
+
+  const scrollToBottom = () =>
+    viewport.current!.scrollTo({
+      top: viewport.current!.scrollHeight,
+    });
   return (
-    <Container
-      maxWidth={false}
-      sx={{
-        flex: 1,
-        py: 3,
-        px: 3,
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-      }}
-    >
-      <Paper
-        elevation={0}
-        variant="outlined"
-        sx={{
-          flex: 1,
-          display: "flex",
-          flexDirection: "column",
-          overflow: "hidden",
-          border: "1px solid",
-          borderColor: pauseLogs
-            ? "rgba(245, 173, 24, 0.5)"
-            : "rgba(245, 173, 24, 0.24)",
-          transition: "border-color 0.3s",
-        }}
-      >
-        {/* Controls Bar */}
-        <Box
-          sx={{
-            p: 2,
-            borderBottom: "1px solid",
-            borderColor: "rgba(245, 173, 24, 0.12)",
-            bgcolor: "rgba(31, 18, 24, 0.6)",
-          }}
-        >
-          <Stack direction="row" spacing={2} alignItems="center">
-            <B4TextField
-              size="small"
-              placeholder="Filter logs..."
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-            />
-            <Stack direction="row" spacing={1} alignItems="center">
-              <B4Badge label={`${logs.length} lines`} size="small" />
-              {filter && (
-                <B4Badge label={`${filtered.length} filtered`} size="small" />
-              )}
-            </Stack>
-            <B4Switch
+    <>
+      {/* Controls Bar */}
+      <Card>
+        <Group ref={ref} justify="space-between">
+          <TextInput
+            placeholder="Filter logs..."
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            flex={1}
+          />
+          <Group>
+            <Badge>{`${logs.length} lines`}</Badge>
+            {filter && <Badge>{`${filtered.length} filtered`}</Badge>}
+
+            <Switch
               label={pauseLogs ? "Paused" : "Streaming"}
               checked={pauseLogs}
-              onChange={(checked: boolean) => setPauseLogs(checked)}
+              onChange={(event) => setPauseLogs(event.currentTarget.checked)}
             />
-            <B4TooltipButton
-              title={"Clear Logs"}
-              onClick={clearLogs}
-              icon={<ClearIcon />}
-            />
-          </Stack>
-        </Box>
-
-        <Box
-          ref={logRef}
-          onScroll={handleScroll}
-          sx={{
-            flex: 1,
-            overflowY: "auto",
-            position: "relative",
-            p: 2,
-            fontFamily:
-              'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace',
-            fontSize: 13,
-            lineHeight: 1.6,
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-            backgroundColor: "#0f0a0e",
-            color: "text.primary",
-          }}
-        >
-          {(() => {
-            if (filtered.length === 0 && logs.length === 0) {
-              return (
-                <Typography
-                  sx={{
-                    color: "text.secondary",
-                    textAlign: "center",
-                    mt: 4,
-                    fontStyle: "italic",
-                  }}
-                >
-                  Waiting for logs...
-                </Typography>
-              );
-            } else if (filtered.length === 0) {
-              return (
-                <Typography
-                  sx={{
-                    color: "text.secondary",
-                    textAlign: "center",
-                    mt: 4,
-                    fontStyle: "italic",
-                  }}
-                >
-                  No logs match your filter
-                </Typography>
-              );
-            } else {
-              return filtered.map((l, i) => (
-                <Typography
-                  key={l + "_" + i}
-                  component="div"
-                  sx={{
-                    fontFamily: "inherit",
-                    fontSize: "inherit",
-                    "&:hover": {
-                      bgcolor: "rgba(158, 28, 96, 0.1)",
-                    },
-                  }}
-                >
-                  {l}
-                </Typography>
-              ));
-            }
-          })()}
-
-          {/* Scroll to Bottom Button */}
-          {showScrollBtn && (
-            <IconButton
-              onClick={scrollToBottom}
-              sx={{
-                position: "absolute",
-                bottom: 16,
-                right: 16,
-                bgcolor: "#9E1C60",
-                color: "#fff",
-                boxShadow: "0 4px 12px rgba(158, 28, 96, 0.4)",
-                "&:hover": {
-                  bgcolor: "#811844",
-                },
-              }}
-              size="small"
-            >
-              <ArrowDownIcon />
-            </IconButton>
-          )}
-        </Box>
-      </Paper>
-    </Container>
+            <ActionIcon onClick={clearLogs}>
+              <IconDelete />
+            </ActionIcon>
+          </Group>
+        </Group>
+      </Card>
+      <DataTable
+        records={filtered.map((line, i) => ({ logs: line, index: i + 1 }))}
+        noRecordsText="No logs yet..."
+        scrollViewportRef={viewport}
+        columns={[{ accessor: "logs", title: "Logs" }]}
+        height={`calc(100dvh - var(--app-shell-header-height) - 2 * var(--mantine-spacing-md) - ${height}px)`}
+        withRowBorders={false}
+        noHeader
+        withTableBorder
+        highlightOnHover
+      />
+    </>
   );
 }
