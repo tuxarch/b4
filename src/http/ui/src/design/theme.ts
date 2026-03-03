@@ -4,8 +4,9 @@ import {
   AppShell,
   Badge,
   CSSVariablesResolver,
-  Card,
   NavLink,
+  Paper,
+  Switch,
   Table,
   ThemeIcon,
   Tooltip,
@@ -28,6 +29,11 @@ export const theme = createTheme({
     AppShell: AppShell.extend({
       defaultProps: {
         c: "white",
+        styles: {
+          navbar: {
+            backgroundColor: "#1c1917",
+          },
+        },
       },
     }),
     NavLink: NavLink.extend({
@@ -36,9 +42,8 @@ export const theme = createTheme({
         autoContrast: true,
       },
     }),
-    Card: Card.extend({
+    Paper: Paper.extend({
       defaultProps: {
-        withBorder: true,
         bg: "#1c1917",
       },
     }),
@@ -70,7 +75,17 @@ export const theme = createTheme({
     Table: Table.extend({
       defaultProps: {
         c: "white",
-        bg: "#1c1917",
+        styles: {
+          thead: {
+            backgroundColor: "#1c1917",
+            color: "var(--mantine-color-dark-1)",
+          },
+        },
+      },
+    }),
+    Switch: Switch.extend({
+      defaultProps: {
+        radius: 0,
       },
     }),
   },

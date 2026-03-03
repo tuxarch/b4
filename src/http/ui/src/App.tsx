@@ -16,6 +16,7 @@ import {
   IconSets,
   IconSettings,
 } from "@b4.icons";
+import { LogsPage } from "@b4.logs";
 import Version from "@components/version/Version";
 
 import {
@@ -70,6 +71,7 @@ export default function App() {
       <AppShell
         padding="md"
         layout="alt"
+        withBorder={false}
         header={{ height: { base: 60, lg: 70 } }}
         navbar={{
           width: { base: 200, lg: 300 },
@@ -139,7 +141,11 @@ export default function App() {
             <Route path="/connections" element={<ConnectionsPage />} />
             {/*
             <Route path="/discovery" element={<DiscoveryPage />} />
+            <Route path="/detector" element={<DetectorPage />} />
+            */}
             <Route path="/logs" element={<LogsPage />} />
+
+            {/*
             <Route path="/settings/*" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
             */}
