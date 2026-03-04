@@ -11,6 +11,7 @@ import { DashboardPage } from "@b4.dashboard";
 import {
   IconConnections,
   IconDashboard,
+  IconDetector,
   IconDiscovery,
   IconLogs,
   IconSets,
@@ -48,6 +49,7 @@ const navItems: NavItem[] = [
   { path: "/dashboard", label: "Dashboard", icon: <IconDashboard /> },
   { path: "/sets", label: "Sets", icon: <IconSets /> },
   { path: "/discovery", label: "Discovery", icon: <IconDiscovery /> },
+  { path: "/detector", label: "DPI Detector", icon: <IconDetector /> },
   { path: "/connections", label: "Connections", icon: <IconConnections /> },
   { path: "/logs", label: "Logs", icon: <IconLogs /> },
   { path: "/settings", label: "Settings", icon: <IconSettings /> },

@@ -4,6 +4,8 @@ export {
   IconCircleFilled as IconCircle,
   IconBroadcast as IconConnections,
   IconDashboardFilled as IconDashboard,
+  IconTrashXFilled as IconDelete,
+  IconPlugConnectedX as IconDetector,
   /*
   Add as AddIcon,
   Cloud as ApiIcon,
@@ -37,7 +39,6 @@ export {
   Fingerprint as FingerprintIcon,
   CallSplit as FragIcon,
   GitHub as GitHubIcon, */
-  IconTrashXFilled as IconDelete,
   /*
   Add as AddIcon,
   Cloud as ApiIcon,
