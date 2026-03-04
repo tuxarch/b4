@@ -1,12 +1,20 @@
-import { useEffect, useRef, useState } from "react";
+import {
+  memo,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 
 import { ParsedLog } from "@b4.connections";
-import { Badge, Card, Center, Group, TextInput } from "@mantine/core";
+import { IconAdd } from "@b4.icons";
+import { useFilteredLogs } from "@hooks/useDomainActions";
+
+import { Badge, Card, Center, Group, Switch, TextInput } from "@mantine/core";
 import { useElementSize, useLocalStorage } from "@mantine/hooks";
 import { DataTable, DataTableSortStatus } from "mantine-datatable";
 
-import { IconAdd } from "@b4.icons";
-import { useFilteredLogs } from "@hooks/useDomainActions";
 import { sortBy } from "lodash";
 
 export type SortColumn =
@@ -21,9 +29,17 @@ export interface TableSortProps {
   logs: ParsedLog[];
   onDomainClick: (domain: string) => void;
   onIpClick: (ip: string) => void;
+  showAll: boolean;
+  setShowAll: (showAll: boolean) => void;
 }
 
-export function TableSort({ logs, onDomainClick, onIpClick }: TableSortProps) {
+export const TableSort = memo(function TableSort({
+  logs,
+  onDomainClick,
+  onIpClick,
+  showAll,
+  setShowAll,
+}: TableSortProps) {
   const [search, setSearch] = useLocalStorage({
     key: "b4_connections_filter",
     defaultValue: "",
@@ -36,13 +52,14 @@ export function TableSort({ logs, onDomainClick, onIpClick }: TableSortProps) {
     defaultValue: { columnAccessor: "timestamp", direction: "desc" },
   });
 
+  const [loading, startTransition] = useTransition();
+  const [OptimisticShowAll, setOptimisticShowAll] = useState(showAll);
   const filteredLogs = useFilteredLogs(logs, search);
 
-  const [records, setRecords] = useState(sortBy(filteredLogs, "timestamp"));
-  useEffect(() => {
+  const records = useMemo(() => {
     const data = sortBy(filteredLogs, sortStatus.columnAccessor) as ParsedLog[];
-    setRecords(sortStatus.direction === "desc" ? data.reverse() : data);
-  }, [sortStatus, filteredLogs]);
+    return sortStatus.direction === "desc" ? data.reverse() : data;
+  }, [filteredLogs, sortStatus]);
 
   const handleSearchChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     setSearch(event.currentTarget.value);
@@ -88,13 +105,27 @@ const TableRowMemo = memo<{
 
   return (
     <>
-      <Card>
+      <Card ref={ref}>
         <Group justify="space-between">
           <TextInput
             placeholder="Search (combine with +, exclude with !, e.g. tcp+!domain:google.com)"
             value={search}
             onChange={handleSearchChange}
             ref={ref}
+            flex={1}
+          />
+          <Switch
+            label={OptimisticShowAll ? "All packets" : "Domains only"}
+            checked={OptimisticShowAll}
+            onChange={(event) => {
+              // бесит меня блять жду виртуализацию
+              setOptimisticShowAll(event.currentTarget.checked);
+              if (event.currentTarget.checked) {
+                startTransition(() => setShowAll(event.currentTarget.checked));
+              } else {
+                setShowAll(false);
+              }
+            }}
           />
         </Group>
       </Card>
@@ -126,7 +157,8 @@ const TableRowMemo = memo<{
             sortable: true,
             render: (record) => (
               <Group justify="space-between" wrap="nowrap">
-                {record.domain} {!record.hostSet && <IconAdd />}
+                {record.domain}
+                {record.domain && !record.hostSet && <IconAdd />}
               </Group>
             ),
           },
@@ -147,9 +179,11 @@ const TableRowMemo = memo<{
         scrollViewportRef={viewport}
         sortStatus={sortStatus}
         onSortStatusChange={setSortStatus}
+        fetching={loading}
         onCellClick={({ record, column }) => {
           if (!record.hostSet) {
-            if (column.accessor === "domain") onDomainClick(record.domain);
+            if (column.accessor === "domain" && record.domain)
+              onDomainClick(record.domain);
             if (column.accessor === "destination")
               onIpClick(record.destination);
           }
@@ -162,4 +196,4 @@ const TableRowMemo = memo<{
       />
     </>
   );
-}
+});

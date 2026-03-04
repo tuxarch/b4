@@ -1,6 +1,7 @@
 import "@fontsource-variable/jetbrains-mono";
 import {
   Accordion,
+  ActionIcon,
   AppShell,
   Badge,
   CSSVariablesResolver,
@@ -56,6 +57,11 @@ export const theme = createTheme({
       defaultProps: {
         variant: "light",
         size: "xl",
+      },
+    }),
+    ActionIcon: ActionIcon.extend({
+      defaultProps: {
+        size: "lg",
       },
     }),
     Tooltip: Tooltip.extend({

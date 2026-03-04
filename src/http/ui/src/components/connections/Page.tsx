@@ -40,10 +40,6 @@ export function ConnectionsPage() {
     variants: string[];
   } | null>(null);
 
-  const showSuccess = useCallback((message: string) => {
-    notifications.show({ title: "Success", message });
-  }, []);
-
   const [availableSets, setAvailableSets] = useState<B4SetConfig[]>([]);
   const [ipInfoToken, setIpInfoToken] = useState<string>("");
   const [devicesEnabled, setDevicesEnabled] = useState<boolean>(false);
@@ -108,13 +104,25 @@ export function ConnectionsPage() {
     };
   }, [fetchSets]);
 
+  const handleDomainClick = useCallback((domain: string) => {
+    const v = generateDomainVariants(domain);
+    setDomainModal({ domain, variants: v.length ? v : [domain] });
+  }, []);
+
+  const handleIpClick = useCallback((ip: string) => {
+    const v = generateIpVariants(ip);
+    setIpModal({
+      ip: ip.split(":")[0].replaceAll(/[[\]]/g, ""),
+      variants: v.length ? v : [ip],
+    });
+  }, []);
+
   useHotkeys([
     [
       "mod+x",
       () => {
         clearDomains();
         resetDomainsBadge();
-        showSuccess("Cleared all domains");
       },
     ],
     [
@@ -122,14 +130,16 @@ export function ConnectionsPage() {
       () => {
         clearDomains();
         resetDomainsBadge();
-        showSuccess("Cleared all domains");
       },
     ],
     [
       "p",
       () => {
         setPauseDomains(!pauseDomains);
-        showSuccess(`Domains ${pauseDomains ? "resumed" : "paused"}`);
+        notifications.show({
+          title: pauseDomains ? "Resumed" : "Paused",
+          message: "",
+        });
       },
     ],
   ]);
@@ -138,17 +148,10 @@ export function ConnectionsPage() {
     <>
       <TableSort
         logs={enrichedLogs}
-        onDomainClick={(domain) => {
-          const v = generateDomainVariants(domain);
-          setDomainModal({ domain, variants: v.length ? v : [domain] });
-        }}
-        onIpClick={(ip) => {
-          const v = generateIpVariants(ip);
-          setIpModal({
-            ip: ip.split(":")[0].replaceAll(/[[\]]/g, ""),
-            variants: v.length ? v : [ip],
-          });
-        }}
+        onDomainClick={handleDomainClick}
+        onIpClick={handleIpClick}
+        showAll={showAll}
+        setShowAll={setShowAll}
       />
 
       <AddSniModal
