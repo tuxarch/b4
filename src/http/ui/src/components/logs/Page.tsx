@@ -77,8 +77,8 @@ export function LogsPage() {
   return (
     <>
       {/* Controls Bar */}
-      <Card>
-        <Group ref={ref} justify="space-between">
+      <Card ref={ref}>
+        <Group justify="space-between">
           <TextInput
             placeholder="Filter logs..."
             value={filter}
