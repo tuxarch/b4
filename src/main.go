@@ -22,6 +22,7 @@ import (
 	"github.com/daniellavrushin/b4/quic"
 	"github.com/daniellavrushin/b4/socks5"
 	"github.com/daniellavrushin/b4/tables"
+	b4tun "github.com/daniellavrushin/b4/tun"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -123,39 +124,58 @@ func runB4(cmd *cobra.Command, args []string) error {
 
 	log.Infof("Loaded targets: %d domains, %d IPs across %d sets", totalDomains, totalIps, len(cfg.Sets))
 
-	// Setup iptables/nftables rules
-	if !cfg.System.Tables.SkipSetup {
-		log.Tracef("Clearing existing iptables/nftables rules")
-		tables.ClearRules(&cfg)
-
-		log.Tracef("Adding tables rules")
-		if err := tables.AddRules(&cfg); err != nil {
-			metrics.RecordEvent("error", fmt.Sprintf("Failed to add tables rules: %v", err))
-			return fmt.Errorf("failed to add tables rules: %w", err)
-		}
-		metrics.RecordEvent("info", "Tables rules configured successfully")
-	} else {
-		log.Infof("Skipping tables setup (--skip-tables)")
-		metrics.TablesStatus = "skipped"
-	}
-
-	// Start netfilter queue pool
-	log.Infof("Starting netfilter queue pool (queue: %d, threads: %d)", cfg.Queue.StartNum, cfg.Queue.Threads)
 	pool := nfq.NewPool(&cfg)
-	if err := pool.Start(); err != nil {
-		metrics.RecordEvent("error", fmt.Sprintf("NFQueue start failed: %v", err))
-		metrics.NFQueueStatus = "error"
-		return fmt.Errorf("netfilter queue start failed: %w", err)
-	}
 
-	metrics.RecordEvent("info", fmt.Sprintf("NFQueue started with %d threads", cfg.Queue.Threads))
-	metrics.NFQueueStatus = "active"
-
-	// Start tables monitor to handle rule restoration if system wipes them
+	var tunEngine *b4tun.Engine
 	var tablesMonitor *tables.Monitor
-	if !cfg.System.Tables.SkipSetup && cfg.System.Tables.MonitorInterval > 0 {
-		tablesMonitor = tables.NewMonitor(&cfg)
-		tablesMonitor.Start()
+
+	if cfg.Queue.Mode == "tun" {
+		// TUN mode: no iptables/nftables needed
+		log.Infof("Starting TUN engine (device: %s, out: %s, threads: %d)",
+			cfg.Queue.TUN.DeviceName, cfg.Queue.TUN.OutInterface, cfg.Queue.Threads)
+		metrics.TablesStatus = "tun"
+
+		tunEngine = b4tun.NewEngine(&cfg, pool)
+		if err := tunEngine.Start(); err != nil {
+			metrics.RecordEvent("error", fmt.Sprintf("TUN engine start failed: %v", err))
+			metrics.NFQueueStatus = "error"
+			return fmt.Errorf("TUN engine start failed: %w", err)
+		}
+
+		metrics.RecordEvent("info", fmt.Sprintf("TUN engine started with %d threads", cfg.Queue.Threads))
+		metrics.NFQueueStatus = "active (tun)"
+	} else {
+		// NFQUEUE mode: setup iptables/nftables rules
+		if !cfg.System.Tables.SkipSetup {
+			log.Tracef("Clearing existing iptables/nftables rules")
+			tables.ClearRules(&cfg)
+
+			log.Tracef("Adding tables rules")
+			if err := tables.AddRules(&cfg); err != nil {
+				metrics.RecordEvent("error", fmt.Sprintf("Failed to add tables rules: %v", err))
+				return fmt.Errorf("failed to add tables rules: %w", err)
+			}
+			metrics.RecordEvent("info", "Tables rules configured successfully")
+		} else {
+			log.Infof("Skipping tables setup (--skip-tables)")
+			metrics.TablesStatus = "skipped"
+		}
+
+		log.Infof("Starting netfilter queue pool (queue: %d, threads: %d)", cfg.Queue.StartNum, cfg.Queue.Threads)
+		if err := pool.Start(); err != nil {
+			metrics.RecordEvent("error", fmt.Sprintf("NFQueue start failed: %v", err))
+			metrics.NFQueueStatus = "error"
+			return fmt.Errorf("netfilter queue start failed: %w", err)
+		}
+
+		metrics.RecordEvent("info", fmt.Sprintf("NFQueue started with %d threads", cfg.Queue.Threads))
+		metrics.NFQueueStatus = "active"
+
+		// Start tables monitor to handle rule restoration if system wipes them
+		if !cfg.System.Tables.SkipSetup && cfg.System.Tables.MonitorInterval > 0 {
+			tablesMonitor = tables.NewMonitor(&cfg)
+			tablesMonitor.Start()
+		}
 	}
 
 	// Start internal web server if configured
@@ -185,10 +205,10 @@ func runB4(cmd *cobra.Command, args []string) error {
 	metrics.RecordEvent("info", fmt.Sprintf("Shutdown initiated by signal: %v", sig))
 
 	// Perform graceful shutdown with timeout
-	return gracefulShutdown(&cfg, pool, httpServer, socks5Server, metrics)
+	return gracefulShutdown(&cfg, pool, tunEngine, httpServer, socks5Server, metrics)
 }
 
-func gracefulShutdown(cfg *config.Config, pool *nfq.Pool, httpServer *http.Server, socks5Server *socks5.Server, metrics *handler.MetricsCollector) error {
+func gracefulShutdown(cfg *config.Config, pool *nfq.Pool, tunEngine *b4tun.Engine, httpServer *http.Server, socks5Server *socks5.Server, metrics *handler.MetricsCollector) error {
 	// Create shutdown context with timeout
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -230,33 +250,37 @@ func gracefulShutdown(cfg *config.Config, pool *nfq.Pool, httpServer *http.Serve
 	log.Infof("Shutting down WebSocket connections...")
 	b4http.Shutdown()
 
-	// Stop NFQueue pool
+	// Stop packet engine
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		log.Infof("Stopping netfilter queue pool...")
 		metrics.NFQueueStatus = "stopping"
 
-		// Use a goroutine with timeout for pool.Stop()
 		stopDone := make(chan struct{})
 		go func() {
-			pool.Stop()
+			if tunEngine != nil {
+				log.Infof("Stopping TUN engine...")
+				tunEngine.Stop()
+			} else {
+				log.Infof("Stopping netfilter queue pool...")
+				pool.Stop()
+			}
 			close(stopDone)
 		}()
 
 		select {
 		case <-stopDone:
-			log.Infof("Netfilter queue pool stopped")
+			log.Infof("Packet engine stopped")
 		case <-shutdownCtx.Done():
-			log.Errorf("Netfilter queue pool stop timed out")
-			shutdownErrors <- fmt.Errorf("NFQueue stop timeout")
+			log.Errorf("Packet engine stop timed out")
+			shutdownErrors <- fmt.Errorf("engine stop timeout")
 		}
 
 		quic.Shutdown()
 	}()
 
-	// Clean up iptables/nftables rules
-	if !cfg.System.Tables.SkipSetup {
+	// Clean up iptables/nftables rules (only in nfqueue mode)
+	if tunEngine == nil && !cfg.System.Tables.SkipSetup {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

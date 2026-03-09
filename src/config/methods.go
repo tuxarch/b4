@@ -192,6 +192,19 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("threads must be at least 1")
 	}
 
+	if c.Queue.Mode == "" {
+		c.Queue.Mode = "nfqueue"
+	}
+	if c.Queue.Mode != "nfqueue" && c.Queue.Mode != "tun" {
+		return fmt.Errorf("queue mode must be 'nfqueue' or 'tun'")
+	}
+
+	if c.Queue.Mode == "tun" {
+		if c.Queue.TUN.OutInterface == "" {
+			return fmt.Errorf("tun out_interface is required in TUN mode (e.g. eth0, wan0)")
+		}
+	}
+
 	if c.Queue.StartNum < 0 || c.Queue.StartNum > 65535 {
 		return fmt.Errorf("queue-num must be between 0 and 65535")
 	}

@@ -6,12 +6,12 @@ import (
 
 	"github.com/daniellavrushin/b4/config"
 	"github.com/daniellavrushin/b4/dns"
+	"github.com/daniellavrushin/b4/engine"
 	"github.com/daniellavrushin/b4/log"
 	"github.com/daniellavrushin/b4/sock"
-	"github.com/florianl/go-nfqueue"
 )
 
-func (w *Worker) processDnsPacket(ipVersion byte, sport uint16, dport uint16, payload []byte, raw []byte, ihl int, id uint32, srcMac string) int {
+func (w *Worker) processDnsPacket(ipVersion byte, sport uint16, dport uint16, payload []byte, raw []byte, ihl int, srcMac string) engine.PacketVerdict {
 
 	if dport == 53 {
 		domain, ok := dns.ParseQueryDomain(payload)
@@ -21,19 +21,13 @@ func (w *Worker) processDnsPacket(ipVersion byte, sport uint16, dport uint16, pa
 
 				targetIP := net.ParseIP(set.DNS.TargetDNS)
 				if targetIP == nil {
-					if err := w.q.SetVerdict(id, nfqueue.NfAccept); err != nil {
-						log.Tracef("failed to set verdict on packet %d: %v", id, err)
-					}
-					return 0
+					return engine.VerdictAccept
 				}
 
 				if ipVersion == IPv4 {
 					targetDNS := targetIP.To4()
 					if targetDNS == nil {
-						if err := w.q.SetVerdict(id, nfqueue.NfAccept); err != nil {
-							log.Tracef("failed to set verdict on packet %d: %v", id, err)
-						}
-						return 0
+						return engine.VerdictAccept
 					}
 
 					originalDst := make(net.IP, 4)
@@ -49,27 +43,18 @@ func (w *Worker) processDnsPacket(ipVersion byte, sport uint16, dport uint16, pa
 					} else {
 						_ = w.sock.SendIPv4(raw, targetDNS)
 					}
-					if err := w.q.SetVerdict(id, nfqueue.NfDrop); err != nil {
-						log.Tracef("failed to set drop verdict on packet %d: %v", id, err)
-					}
 					log.Infof("DNS redirect: %s -> %s (set: %s)", domain, set.DNS.TargetDNS, set.Name)
-					return 0
+					return engine.VerdictDrop
 
 				} else {
 					cfg := w.getConfig()
 					if !cfg.Queue.IPv6Enabled {
-						if err := w.q.SetVerdict(id, nfqueue.NfAccept); err != nil {
-							log.Tracef("failed to set verdict on packet %d: %v", id, err)
-						}
-						return 0
+						return engine.VerdictAccept
 					}
 
 					targetDNS := targetIP.To16()
 					if targetDNS == nil {
-						if err := w.q.SetVerdict(id, nfqueue.NfAccept); err != nil {
-							log.Tracef("failed to set verdict on packet %d: %v", id, err)
-						}
-						return 0
+						return engine.VerdictAccept
 					}
 
 					originalDst := make(net.IP, 16)
@@ -84,11 +69,8 @@ func (w *Worker) processDnsPacket(ipVersion byte, sport uint16, dport uint16, pa
 					} else {
 						_ = w.sock.SendIPv6(raw, targetDNS)
 					}
-					if err := w.q.SetVerdict(id, nfqueue.NfDrop); err != nil {
-						log.Tracef("failed to set drop verdict on packet %d: %v", id, err)
-					}
 					log.Infof("DNS redirect (IPv6): %s -> %s (set: %s)", domain, set.DNS.TargetDNS, set.Name)
-					return 0
+					return engine.VerdictDrop
 				}
 			}
 		}
@@ -102,10 +84,7 @@ func (w *Worker) processDnsPacket(ipVersion byte, sport uint16, dport uint16, pa
 				sock.FixUDPChecksum(raw, ihl)
 				dns.DnsNATDelete(net.IP(raw[16:20]), dport)
 				_ = w.sock.SendIPv4(raw, net.IP(raw[16:20]))
-				if err := w.q.SetVerdict(id, nfqueue.NfDrop); err != nil {
-					log.Tracef("failed to set drop verdict on packet %d: %v", id, err)
-				}
-				return 0
+				return engine.VerdictDrop
 			}
 		} else {
 			cfg := w.getConfig()
@@ -115,19 +94,13 @@ func (w *Worker) processDnsPacket(ipVersion byte, sport uint16, dport uint16, pa
 					sock.FixUDPChecksumV6(raw)
 					dns.DnsNATDelete(net.IP(raw[24:40]), dport)
 					_ = w.sock.SendIPv6(raw, net.IP(raw[24:40]))
-					if err := w.q.SetVerdict(id, nfqueue.NfDrop); err != nil {
-						log.Tracef("failed to set drop verdict on packet %d: %v", id, err)
-					}
-					return 0
+					return engine.VerdictDrop
 				}
 			}
 		}
 	}
 
-	if err := w.q.SetVerdict(id, nfqueue.NfAccept); err != nil {
-		log.Tracef("failed to set verdict on packet %d: %v", id, err)
-	}
-	return 0
+	return engine.VerdictAccept
 }
 
 func (w *Worker) sendFragmentedDNSQueryV4(cfg *config.SetConfig, raw []byte, ihl int, dst net.IP) {

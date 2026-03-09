@@ -144,6 +144,7 @@ var DefaultConfig = Config{
 	ConfigPath: "",
 
 	Queue: QueueConfig{
+		Mode:        "nfqueue",
 		StartNum:    537,
 		Mark:        1 << 15,
 		Threads:     4,
@@ -162,6 +163,11 @@ var DefaultConfig = Config{
 		MSSClamp: MSSClampConfig{
 			Enabled: false,
 			Size:    88,
+		},
+		TUN: TUNConfig{
+			DeviceName:   "b4tun0",
+			Address:      "10.255.0.1/30",
+			RouteTable:   100,
 		},
 	},
 

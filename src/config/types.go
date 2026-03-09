@@ -26,6 +26,7 @@ type ApiConfig struct {
 }
 
 type QueueConfig struct {
+	Mode              string         `json:"mode" bson:"mode"` // "nfqueue" (default) or "tun"
 	StartNum          int            `json:"start_num" bson:"start_num"`
 	Threads           int            `json:"threads" bson:"threads"`
 	Mark              uint           `json:"mark" bson:"mark"`
@@ -36,6 +37,15 @@ type QueueConfig struct {
 	Interfaces        []string       `json:"interfaces" bson:"interfaces"`
 	Devices           DevicesConfig  `json:"devices" bson:"devices"`
 	MSSClamp          MSSClampConfig `json:"mss_clamp" bson:"mss_clamp"`
+	TUN               TUNConfig      `json:"tun" bson:"tun"`
+}
+
+type TUNConfig struct {
+	DeviceName    string `json:"device_name" bson:"device_name"`       // TUN device name, default: "b4tun0"
+	Address       string `json:"address" bson:"address"`               // TUN device address, default: "10.255.0.1/30"
+	OutInterface  string `json:"out_interface" bson:"out_interface"`   // Real outbound interface, e.g. "eth0", "wan0"
+	OutGateway    string `json:"out_gateway" bson:"out_gateway"`       // Real gateway IP, auto-detected if empty
+	RouteTable    int    `json:"route_table" bson:"route_table"`       // Policy routing table number, default: 100
 }
 
 type DevicesConfig struct {

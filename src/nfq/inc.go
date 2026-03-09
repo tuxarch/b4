@@ -7,14 +7,14 @@ import (
 	"time"
 
 	"github.com/daniellavrushin/b4/config"
+	"github.com/daniellavrushin/b4/engine"
 	"github.com/daniellavrushin/b4/log"
 	"github.com/daniellavrushin/b4/sock"
-	"github.com/florianl/go-nfqueue"
 )
 
 var corruptionStrategies = []string{"badsum", "badseq", "badack", "all"}
 
-func (w *Worker) HandleIncoming(q *nfqueue.Nfqueue, id uint32, v byte, raw []byte, ihl int, src net.IP, dstStr string, dport uint16, srcStr string, sport uint16, payload []byte) int {
+func (w *Worker) HandleIncoming(v byte, raw []byte, ihl int, src net.IP, dstStr string, dport uint16, srcStr string, sport uint16, payload []byte) engine.PacketVerdict {
 	incomingSet := connState.GetSetForIncoming(dstStr, dport, srcStr, sport)
 
 	if incomingSet != nil && incomingSet.TCP.Incoming.Mode != config.ConfigOff {
@@ -61,10 +61,7 @@ func (w *Worker) HandleIncoming(q *nfqueue.Nfqueue, id uint32, v byte, raw []byt
 		}
 	}
 
-	if err := q.SetVerdict(id, nfqueue.NfAccept); err != nil {
-		log.Tracef("failed to accept incoming packet %d: %v", id, err)
-	}
-	return 0
+	return engine.VerdictAccept
 }
 
 func (w *Worker) applyCorruption(fake []byte, ihl int, strategy string) {
