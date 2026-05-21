@@ -3,6 +3,7 @@ package config
 import (
 	"math/rand"
 
+	"github.com/daniellavrushin/b4/geodat"
 	"github.com/daniellavrushin/b4/log"
 )
 
@@ -191,17 +192,17 @@ type TargetsConfig struct {
 }
 
 type SystemConfig struct {
-	Tables      TablesConfig    `json:"tables"`
-	Logging     Logging         `json:"logging"`
-	WebServer   WebServerConfig `json:"web_server"`
-	Socks5      Socks5Config    `json:"socks5"`
-	MTProto     MTProtoConfig   `json:"mtproto"`
-	Checker     DiscoveryConfig `json:"checker"`
-	Geo         GeoDatConfig    `json:"geo"`
-	API         ApiConfig       `json:"api"`
-	AI          AIConfig        `json:"ai"`
-	Timezone    string          `json:"timezone"`
-	MemoryLimit string          `json:"memory_limit,omitempty"`
+	Tables      TablesConfig        `json:"tables"`
+	Logging     Logging             `json:"logging"`
+	WebServer   WebServerConfig     `json:"web_server"`
+	Socks5      Socks5Config        `json:"socks5"`
+	MTProto     MTProtoConfig       `json:"mtproto"`
+	Checker     DiscoveryConfig     `json:"checker"`
+	Geo         geodat.GeoDatConfig `json:"geo"`
+	API         ApiConfig           `json:"api"`
+	AI          AIConfig            `json:"ai"`
+	Timezone    string              `json:"timezone"`
+	MemoryLimit string              `json:"memory_limit,omitempty"`
 }
 
 type AIConfig struct {
@@ -298,20 +299,14 @@ type SetConfig struct {
 	UDPPortRanges []PortRange         `json:"-"`
 	Routing       RoutingConfig       `json:"routing"`
 	Escalate      EscalateConfig      `json:"escalate"`
+	MSSClamp      MSSClampConfig      `json:"mss_clamp"`
 }
 
 type EscalateConfig struct {
-	To           string `json:"to"`              // ID of next set to use after this set is detected as blocked for a destination
-	RstThreshold int    `json:"rst_threshold"`   // 0 -> 3
-	RstWindowSec int    `json:"rst_window_sec"`  // 0 -> 30
-	TtlSec       int    `json:"ttl_sec"`         // 0 -> 3600
-}
-
-type GeoDatConfig struct {
-	GeoSitePath string `json:"sitedat_path"`
-	GeoIpPath   string `json:"ipdat_path"`
-	GeoSiteURL  string `json:"sitedat_url"`
-	GeoIpURL    string `json:"ipdat_url"`
+	To           string `json:"to"`             // ID of next set to use after this set is detected as blocked for a destination
+	RstThreshold int    `json:"rst_threshold"`  // 0 -> 3
+	RstWindowSec int    `json:"rst_window_sec"` // 0 -> 30
+	TtlSec       int    `json:"ttl_sec"`        // 0 -> 3600
 }
 
 type ComboFragConfig struct {
@@ -394,4 +389,13 @@ type UpstreamProxyConfig struct {
 	Password  string `json:"password,omitempty"`
 	FailOpen  bool   `json:"fail_open"`
 	UseDomain bool   `json:"use_domain"`
+}
+
+type SetMSSClampEntry struct {
+	SetID  string
+	SetIdx int
+	Size   int
+	IPv4   []string
+	IPv6   []string
+	MACs   []string
 }

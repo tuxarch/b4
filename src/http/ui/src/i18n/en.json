@@ -291,7 +291,14 @@
       "wsEndpointHostHelp": "Override the IP used when WS uses native kws*.web.telegram.org SNI. Default: 149.154.167.220. Leave empty for default. Does not affect the custom WebSocket domain path.",
       "testWs": "Test connection",
       "testWsRunning": "Testing…",
-      "testWsHelp": "Probes DC 2 over the configured transport(s) and reports latency."
+      "testWsHelp": "Probes DC 2 over the configured transport(s) and reports latency.",
+      "testDirectTcp": "Test direct TCP",
+      "testDirectTcpHelp": "Probes DC 2 over direct TCP to Telegram, bypassing the DC Relay. Use to isolate whether issues come from the relay or from Telegram itself.",
+      "testHeldMs": "held {{ms}} ms",
+      "testStage_dial": "connect failed",
+      "testStage_handshake": "handshake failed",
+      "testStage_hold": "dropped after handshake",
+      "upstreamAutoRelayDesc": "DC Relay is configured: relay TCP is tried first, WebSocket as fallback."
     },
     "MSSClamping": {
       "title": "Global MSS Clamping",
@@ -458,7 +465,17 @@
       "uploadingGeosite": "Uploading geosite.dat...",
       "uploadingGeoip": "Uploading geoip.dat...",
       "uploadSuccess": "Uploaded successfully",
-      "selectSource": "Please select a source or enter a URL"
+      "selectSource": "Please select a source or enter a URL",
+      "autoUpdate": "Auto-update",
+      "autoUpdateOnStartup": "Refresh on startup",
+      "autoUpdateOnStartupDesc": "Re-download both files when b4 starts. Missing files (e.g. when stored in /tmp) are always re-downloaded if a source URL is set.",
+      "autoUpdateInterval": "Schedule",
+      "autoUpdateIntervalHelp": "Run periodic refresh in the background using the configured source URLs",
+      "autoUpdateOff": "Off",
+      "autoUpdateDaily": "Daily",
+      "autoUpdateWeekly": "Weekly",
+      "autoUpdateMonthly": "Monthly",
+      "autoUpdateLastRun": "Last run"
     },
     "Backup": {
       "alert": "Create a backup of your B4 configuration directory or restore from a previous backup. Backups include configuration, discovery history, detector history, device aliases, and captured payloads. Geodat files (.dat) and OUI database are excluded.",
@@ -619,6 +636,9 @@
       "selectAll": "Select All",
       "deselectAll": "Deselect All",
       "deleteCount": "Delete",
+      "enableAll": "Enable All",
+      "disableAll": "Disable All",
+      "toggleAllTooltip": "Toggle all sets at once",
       "select": "Select",
       "createSet": "Create Set",
       "noMatch": "No sets match",
@@ -629,6 +649,9 @@
       "setsDeleted_one": "{{count}} set deleted",
       "setsDeleted_other": "{{count}} sets deleted",
       "failedToDeleteSets": "Failed to delete sets",
+      "allEnabled": "All sets enabled",
+      "allDisabled": "All sets disabled",
+      "failedToToggleSets": "Failed to update sets",
       "failedToUpdate": "Failed to update",
       "noSets": "No configuration sets",
       "noSetsHint": "Create your first set to start configuring bypass rules"
@@ -756,7 +779,15 @@
         "rstEnable": "Enable RST Protection",
         "rstEnableDesc": "Drop RST packets with mismatched TTL to prevent DPI-injected connection resets",
         "rstTtlTolerance": "TTL Tolerance",
-        "rstTtlToleranceHelper": "Maximum allowed difference between the server's reference TTL and an incoming RST packet's TTL"
+        "rstTtlToleranceHelper": "Maximum allowed difference between the server's reference TTL and an incoming RST packet's TTL",
+        "mssClamp": "MSS Clamping",
+        "mssEnable": "Enable per-set MSS",
+        "mssEnableDesc": "Override TCP MSS for connections matching this set's IP, GeoIP, or device targets",
+        "mssScopeHint": "MSS is set on the TCP SYN, before the TLS handshake. It can only be scoped by IP / GeoIP / source device. SNI domain, GeoSite and TLS version filters do not participate in MSS clamping.",
+        "mssScopeRequired": "Add an IP, GeoIP, or source device target before enabling per-set MSS.",
+        "mssAppliesTo": "Scope: IPs {{ips}}  Devices {{macs}}",
+        "mssSize": "MSS size (bytes)",
+        "mssSizeHelper": "Typical TSPU workaround for Smart TVs on YouTube: 88"
       },
       "splitting": {
         "header": "Splitting Strategy",

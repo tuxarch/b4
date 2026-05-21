@@ -18,6 +18,8 @@ type Watchdog struct {
 	stop         chan struct{}
 	stopped      chan struct{}
 	saveFunc     func(*config.Config) error
+	healing      atomic.Bool
+	healWG       sync.WaitGroup
 }
 
 func New(cfgPtr *atomic.Pointer[config.Config], discoveryRT *discovery.Runtime, saveFunc func(*config.Config) error) *Watchdog {
@@ -39,6 +41,7 @@ func (w *Watchdog) Start() {
 func (w *Watchdog) Stop() {
 	close(w.stop)
 	<-w.stopped
+	w.healWG.Wait()
 	log.Infof("[WATCHDOG] watchdog service stopped")
 }
 
@@ -186,8 +189,14 @@ func (w *Watchdog) tick() {
 	}
 	w.mu.Unlock()
 
-	if len(needsHealing) > 0 {
-		w.healBatch(needsHealing)
+	if len(needsHealing) > 0 && w.healing.CompareAndSwap(false, true) {
+		w.healWG.Add(1)
+		go func(domains []string) {
+			defer w.healWG.Done()
+			defer w.healing.Store(false)
+			log.Infof("[WATCHDOG] starting heal for %d domain(s): %v", len(domains), domains)
+			w.healBatch(domains)
+		}(needsHealing)
 	}
 }
 
@@ -202,7 +211,9 @@ func (w *Watchdog) healBatch(domains []string) {
 
 	w.mu.Lock()
 	for _, domain := range domains {
-		w.domainStates[domain].Status = StatusEscalating
+		if st, ok := w.domainStates[domain]; ok {
+			st.Status = StatusEscalating
+		}
 	}
 	w.mu.Unlock()
 
@@ -216,7 +227,10 @@ func (w *Watchdog) healBatch(domains []string) {
 		log.Warnf("[WATCHDOG] failed to start discovery: %v", err)
 		w.mu.Lock()
 		for _, domain := range domains {
-			st := w.domainStates[domain]
+			st, ok := w.domainStates[domain]
+			if !ok {
+				continue
+			}
 			st.Status = StatusDegraded
 			st.ConsecutiveFailures = 0
 			st.CooldownUntil = time.Now().Add(time.Duration(wdCfg.Cooldown) * time.Second)
@@ -273,7 +287,10 @@ func (w *Watchdog) healBatch(domains []string) {
 		log.Warnf("[WATCHDOG] discovery suite disappeared")
 		w.mu.Lock()
 		for _, domain := range domains {
-			st := w.domainStates[domain]
+			st, ok := w.domainStates[domain]
+			if !ok {
+				continue
+			}
 			st.Status = StatusDegraded
 			st.ConsecutiveFailures = 0
 			st.CooldownUntil = time.Now().Add(time.Duration(wdCfg.Cooldown) * time.Second)
@@ -289,7 +306,10 @@ func (w *Watchdog) healBatch(domains []string) {
 	defer w.mu.Unlock()
 
 	for _, domain := range domains {
-		st := w.domainStates[domain]
+		st, ok := w.domainStates[domain]
+		if !ok {
+			continue
+		}
 		if err, failed := applyErrors[domain]; failed && err != nil {
 			log.Warnf("[WATCHDOG] %s: %v, cooldown %ds", domain, err, wdCfg.Cooldown)
 			st.Status = StatusDegraded

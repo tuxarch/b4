@@ -587,11 +587,96 @@ func (manager *IPTablesManager) buildManifest() (Manifest, error) {
 	// MSS Clamp rules
 	global, globalSize := cfg.HasGlobalMSSClamp()
 	deviceClamps := cfg.CollectDeviceMSSClamps()
-	if global || len(deviceClamps) > 0 {
+	setClamps := cfg.CollectSetMSSClamps()
+	if global || len(deviceClamps) > 0 || len(setClamps) > 0 {
 		log.Infof("IPTABLES: adding MSS clamp rules")
 
 		for _, ipt := range ipts {
-			// Global MSS clamp - all TCP port 443
+			// Emit order matters: rules use `-I` (insert at top), so the LAST
+			// rule emitted ends up FIRST in chain. TCPMSS does not terminate,
+			// so the LAST matching rule wins. To get the precedence
+			// per-set > per-device > global (matching nftables semantics),
+			// emit per-set first (bottom of chain), then per-device, then global (top).
+
+			isV6 := strings.HasPrefix(ipt, "ip6")
+			for _, e := range setClamps {
+				var ips []string
+				var setName, setFamily string
+				if isV6 {
+					ips = e.IPv6
+					setName = fmt.Sprintf("b4_mss_%d_v6", e.SetIdx)
+					setFamily = "inet6"
+				} else {
+					ips = e.IPv4
+					setName = fmt.Sprintf("b4_mss_%d_v4", e.SetIdx)
+					setFamily = "inet"
+				}
+				hasIPs := len(ips) > 0
+				if hasIPs && !hasBinary("ipset") {
+					log.Warnf("ipset binary not found; skipping per-set MSS for set %q (install ipset via your system package manager)", e.SetID)
+					continue
+				}
+				if hasIPs {
+					ipsets = append(ipsets, IPSet{Name: setName, Family: setFamily, Entries: ips})
+				}
+				tcpMSSSpec := fmt.Sprintf("%d", e.Size)
+				if len(e.MACs) > 0 {
+					for _, mac := range e.MACs {
+						spec := []string{"-m", "mac", "--mac-source", mac, "-p", "tcp", "--dport", "443"}
+						if hasIPs {
+							spec = append(spec, "-m", "set", "--match-set", setName, "dst")
+						}
+						spec = append(spec, "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--set-mss", tcpMSSSpec)
+						rules = append(rules,
+							Rule{manager: manager, IPT: ipt, Table: "mangle", Chain: "FORWARD", Action: "I", Spec: spec},
+						)
+					}
+				} else if hasIPs {
+					rules = append(rules,
+						Rule{manager: manager, IPT: ipt, Table: "mangle", Chain: "OUTPUT", Action: "I",
+							Spec: []string{"-p", "tcp", "--dport", "443",
+								"-m", "set", "--match-set", setName, "dst",
+								"--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--set-mss", tcpMSSSpec}},
+						Rule{manager: manager, IPT: ipt, Table: "mangle", Chain: "FORWARD", Action: "I",
+							Spec: []string{"-p", "tcp", "--dport", "443",
+								"-m", "set", "--match-set", setName, "dst",
+								"--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--set-mss", tcpMSSSpec}},
+						Rule{manager: manager, IPT: ipt, Table: "mangle", Chain: preChainName, Action: "I",
+							Spec: []string{"-p", "tcp", "--sport", "443",
+								"-m", "set", "--match-set", setName, "src",
+								"--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--set-mss", tcpMSSSpec}},
+					)
+				}
+				log.Infof("IPTABLES[%s]: per-set MSS clamp for set %q (size: %d, ips=%d macs=%d)",
+					ipt, e.SetID, e.Size, len(ips), len(e.MACs))
+			}
+
+			if len(deviceClamps) > 0 {
+				minSize := 1460
+				for size, macs := range deviceClamps {
+					if size < minSize {
+						minSize = size
+					}
+					tcpMSSSpec := fmt.Sprintf("%d", size)
+					for _, mac := range macs {
+						rules = append(rules,
+							Rule{manager: manager, IPT: ipt, Table: "mangle", Chain: "FORWARD", Action: "I",
+								Spec: []string{"-m", "mac", "--mac-source", mac, "-p", "tcp", "--dport", "443",
+									"--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--set-mss", tcpMSSSpec}},
+						)
+					}
+					log.Infof("IPTABLES[%s]: per-device MSS clamp for %d devices (size: %d)", ipt, len(macs), size)
+				}
+
+				if !global {
+					rules = append(rules,
+						Rule{manager: manager, IPT: ipt, Table: "mangle", Chain: "FORWARD", Action: "I",
+							Spec: []string{"-p", "tcp", "--sport", "443",
+								"--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--set-mss", fmt.Sprintf("%d", minSize)}},
+					)
+				}
+			}
+
 			if global {
 				tcpMSSSpec := fmt.Sprintf("%d", globalSize)
 				rules = append(rules,
@@ -603,36 +688,6 @@ func (manager *IPTablesManager) buildManifest() (Manifest, error) {
 						Spec: []string{"-p", "tcp", "--sport", "443", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--set-mss", tcpMSSSpec}},
 				)
 				log.Infof("IPTABLES[%s]: global MSS clamp enabled (size: %d)", ipt, globalSize)
-			}
-
-			// Per-device MSS clamp rules (FORWARD chain with MAC matching)
-			if len(deviceClamps) > 0 {
-				minSize := 1460
-				for size, macs := range deviceClamps {
-					if size < minSize {
-						minSize = size
-					}
-					tcpMSSSpec := fmt.Sprintf("%d", size)
-					for _, mac := range macs {
-						// Outgoing SYN from device (mac-source match, dport 443)
-						rules = append(rules,
-							Rule{manager: manager, IPT: ipt, Table: "mangle", Chain: "FORWARD", Action: "I",
-								Spec: []string{"-m", "mac", "--mac-source", mac, "-p", "tcp", "--dport", "443",
-									"--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--set-mss", tcpMSSSpec}},
-						)
-					}
-					log.Infof("IPTABLES[%s]: per-device MSS clamp for %d devices (size: %d)", ipt, len(macs), size)
-				}
-
-				// iptables cannot match destination MAC. Add a broad FORWARD rule
-				// for incoming SYN-ACK using the smallest per-device size.
-				if !global {
-					rules = append(rules,
-						Rule{manager: manager, IPT: ipt, Table: "mangle", Chain: "FORWARD", Action: "I",
-							Spec: []string{"-p", "tcp", "--sport", "443",
-								"--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--set-mss", fmt.Sprintf("%d", minSize)}},
-					)
-				}
 			}
 		}
 	}
@@ -673,7 +728,24 @@ func (ipt *IPTablesManager) Clear() error {
 	time.Sleep(30 * time.Millisecond)
 	m.RemoveChains()
 	m.DestroyIPSets()
+	destroyOrphanMSSIPSets()
 	return nil
+}
+
+func destroyOrphanMSSIPSets() {
+	if !hasBinary("ipset") {
+		return
+	}
+	out, err := run("ipset", "list", "-name")
+	if err != nil {
+		return
+	}
+	for _, name := range strings.Split(out, "\n") {
+		name = strings.TrimSpace(name)
+		if strings.HasPrefix(name, "b4_mss_") {
+			_, _ = run("ipset", "destroy", name)
+		}
+	}
 }
 
 func (ipt *IPTablesManager) clearB4JumpRules() {

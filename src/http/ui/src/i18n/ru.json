@@ -287,7 +287,14 @@
       "wsEndpointHostHelp": "IP, к которому подключаемся для встроенного kws*.web.telegram.org SNI. По умолчанию 149.154.167.220. Оставьте пустым для значения по умолчанию. Не влияет на путь через свой WebSocket-домен.",
       "testWs": "Проверить соединение",
       "testWsRunning": "Проверка…",
-      "testWsHelp": "Пробует достучаться до DC 2 настроенным транспортом (или транспортами) и измеряет задержку."
+      "testWsHelp": "Пробует достучаться до DC 2 настроенным транспортом (или транспортами) и измеряет задержку.",
+      "testDirectTcp": "Прямой TCP",
+      "testDirectTcpHelp": "Пробует DC 2 напрямую по TCP к Telegram, минуя DC Relay. Помогает отличить проблему на стороне реле от проблемы на стороне Telegram.",
+      "testHeldMs": "держалось {{ms}} мс",
+      "testStage_dial": "соединение не установлено",
+      "testStage_handshake": "сбой рукопожатия",
+      "testStage_hold": "соединение сброшено после рукопожатия",
+      "upstreamAutoRelayDesc": "DC Relay настроен: сначала пробуется реле по TCP, WebSocket - как резерв."
     },
     "MSSClamping": {
       "title": "Глобальный MSS Clamping",
@@ -454,7 +461,17 @@
       "uploadingGeosite": "Загрузка geosite.dat...",
       "uploadingGeoip": "Загрузка geoip.dat...",
       "uploadSuccess": "Успешно загружено",
-      "selectSource": "Выберите источник или введите URL"
+      "selectSource": "Выберите источник или введите URL",
+      "autoUpdate": "Автообновление",
+      "autoUpdateOnStartup": "Обновлять при запуске",
+      "autoUpdateOnStartupDesc": "Перекачивать оба файла при старте b4. Отсутствующие файлы (например при хранении в /tmp) скачиваются всегда, если задан URL источника.",
+      "autoUpdateInterval": "Расписание",
+      "autoUpdateIntervalHelp": "Периодическое обновление в фоне с использованием заданных URL источников",
+      "autoUpdateOff": "Выключено",
+      "autoUpdateDaily": "Ежедневно",
+      "autoUpdateWeekly": "Еженедельно",
+      "autoUpdateMonthly": "Ежемесячно",
+      "autoUpdateLastRun": "Последний запуск"
     },
     "Backup": {
       "alert": "Создайте бэкап директории конфигурации B4 или восстановите из предыдущего. Бэкап включает конфигурацию, историю поиска, историю детектора, псевдонимы устройств и захваченные payloads. Файлы геоданных (.dat) и база OUI исключены.",
@@ -615,6 +632,9 @@
       "selectAll": "Выбрать все",
       "deselectAll": "Снять выбор",
       "deleteCount": "Удалить",
+      "enableAll": "Включить все",
+      "disableAll": "Отключить все",
+      "toggleAllTooltip": "Переключить все сеты сразу",
       "select": "Выбрать",
       "createSet": "Создать сет",
       "noMatch": "Нет сетов по запросу",
@@ -626,6 +646,9 @@
       "setsDeleted_few": "{{count}} сета удалено",
       "setsDeleted_many": "{{count}} сетов удалено",
       "failedToDeleteSets": "Не удалось удалить сеты",
+      "allEnabled": "Все сеты включены",
+      "allDisabled": "Все сеты отключены",
+      "failedToToggleSets": "Не удалось обновить сеты",
       "failedToUpdate": "Не удалось обновить",
       "noSets": "Нет конфигурационных сетов",
       "noSetsHint": "Создайте первый сет для настройки правил обхода"
@@ -753,7 +776,15 @@
         "rstEnable": "Включить защиту от RST-инъекций",
         "rstEnableDesc": "Отбрасывать RST пакеты с несовпадающим TTL для защиты от принудительного разрыва соединений",
         "rstTtlTolerance": "Допуск TTL",
-        "rstTtlToleranceHelper": "Максимально допустимая разница между TTL сервера и TTL входящего RST пакета"
+        "rstTtlToleranceHelper": "Максимально допустимая разница между TTL сервера и TTL входящего RST пакета",
+        "mssClamp": "MSS Clamping",
+        "mssEnable": "Включить MSS для сета",
+        "mssEnableDesc": "Переопределить TCP MSS для соединений, попадающих под IP, GeoIP или устройства этого сета",
+        "mssScopeHint": "MSS выставляется в TCP SYN, до TLS handshake. Поэтому область действия ограничена IP / GeoIP / source device. Фильтры по SNI домену, GeoSite и версии TLS в MSS clamping не участвуют.",
+        "mssScopeRequired": "Перед включением MSS добавьте в сет цель по IP, GeoIP или source device.",
+        "mssAppliesTo": "Область: IPs {{ips}}  Devices {{macs}}",
+        "mssSize": "Размер MSS (байт)",
+        "mssSizeHelper": "Типичный обход ТСПУ для Smart TV на YouTube: 88"
       },
       "splitting": {
         "header": "Стратегия разделения",

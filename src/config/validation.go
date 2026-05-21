@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -100,6 +101,15 @@ func (c *Config) Validate() error {
 		c.Queue.UDPConnBytesLimit = 30
 	}
 
+	if c.System.Geo.GeoSitePath != "" && !filepath.IsAbs(c.System.Geo.GeoSitePath) {
+		v.addf("system.geo.sitedat_path", "must_be_absolute", map[string]any{"path": c.System.Geo.GeoSitePath}, "geosite path must be an absolute path (got: %q)", c.System.Geo.GeoSitePath)
+		return v.result()
+	}
+	if c.System.Geo.GeoIpPath != "" && !filepath.IsAbs(c.System.Geo.GeoIpPath) {
+		v.addf("system.geo.ipdat_path", "must_be_absolute", map[string]any{"path": c.System.Geo.GeoIpPath}, "geoip path must be an absolute path (got: %q)", c.System.Geo.GeoIpPath)
+		return v.result()
+	}
+
 	for setIdx, set := range c.Sets {
 		if set.Routing.Table < 0 {
 			set.Routing.Table = 0
@@ -173,6 +183,25 @@ func (c *Config) Validate() error {
 		if len(set.Targets.GeoIpCategories) > 0 && c.System.Geo.GeoIpPath == "" {
 			v.add(fmt.Sprintf("sets[%d].targets.geoip_categories", setIdx), "geoip_path_missing", "geoip path must be configured to use geoip categories", nil)
 			return v.result()
+		}
+
+		if set.MSSClamp.Enabled {
+			if set.MSSClamp.Size <= 0 {
+				set.MSSClamp.Size = 88
+			} else if set.MSSClamp.Size < 10 {
+				set.MSSClamp.Size = 10
+			}
+			if set.MSSClamp.Size > 1460 {
+				set.MSSClamp.Size = 1460
+			}
+			hasIPScope := len(set.Targets.IPs) > 0 || len(set.Targets.GeoIpCategories) > 0
+			hasMACScope := len(set.Targets.SourceDevices) > 0
+			if !hasIPScope && !hasMACScope {
+				v.addf(fmt.Sprintf("sets[%d].mss_clamp", setIdx), "mss_clamp_scope_required",
+					map[string]any{"set": set.Name},
+					"set %q: MSS clamp requires IP, GeoIP, or source device targets (MSS is set on SYN, before SNI/GeoSite can match)", set.Name)
+				return v.result()
+			}
 		}
 	}
 

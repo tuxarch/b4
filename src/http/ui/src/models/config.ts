@@ -253,6 +253,13 @@ export interface GeoConfig {
   ipdat_url: string;
   sitedat_path: string;
   ipdat_path: string;
+  auto_update: GeoAutoUpdateConfig;
+}
+
+export interface GeoAutoUpdateConfig {
+  on_startup?: boolean;
+  interval?: "" | "daily" | "weekly" | "monthly";
+  last_run?: string;
 }
 
 export interface ApiConfig {
@@ -329,6 +336,7 @@ export interface B4SetConfig {
   dns: DNSConfig;
   routing: RoutingConfig;
   escalate?: EscalateConfig;
+  mss_clamp?: MSSClampConfig;
 }
 
 export interface EscalateConfig {
