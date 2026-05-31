@@ -38,10 +38,6 @@ func (c *prefixConn) CloseWrite() error {
 type TransparentBridge struct {
 	cfg     atomic.Pointer[config.Config]
 	bufPool sync.Pool
-
-	mu       sync.Mutex
-	pool     *wsPool
-	poolInit bool
 }
 
 func NewTransparentBridge(cfg *config.Config) *TransparentBridge {
@@ -56,38 +52,7 @@ func NewTransparentBridge(cfg *config.Config) *TransparentBridge {
 }
 
 func (b *TransparentBridge) UpdateConfig(newCfg *config.Config) {
-	old := b.cfg.Swap(newCfg)
-	if old != nil &&
-		old.System.MTProto.WSEndpointHost == newCfg.System.MTProto.WSEndpointHost &&
-		old.System.MTProto.WSCustomDomain == newCfg.System.MTProto.WSCustomDomain &&
-		old.Queue.Mark == newCfg.Queue.Mark {
-		return
-	}
-	b.mu.Lock()
-	oldPool := b.pool
-	b.pool = nil
-	b.poolInit = false
-	b.mu.Unlock()
-	if oldPool != nil {
-		oldPool.close()
-	}
-}
-
-func (b *TransparentBridge) getPool() *wsPool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if !b.poolInit {
-		cfg := b.cfg.Load()
-		mt := cfg.System.MTProto
-		p := newWSPool(MTProtoUpstream{
-			WSEndpointHost: mt.WSEndpointHost,
-			WSCustomDomain: mt.WSCustomDomain,
-		}, cfg.Queue.Mark, wsPoolDefaultSize)
-		p.warmup([]int{2, 4})
-		b.pool = p
-		b.poolInit = true
-	}
-	return b.pool
+	b.cfg.Store(newCfg)
 }
 
 func (b *TransparentBridge) Handle(client net.Conn, origIP net.IP, origPort int) (bool, net.Conn) {
@@ -136,7 +101,7 @@ func (b *TransparentBridge) Handle(client net.Conn, origIP net.IP, origPort int)
 	mtCfg.UpstreamMode = "auto"
 	mtCfg.DCRelay = ""
 
-	dcConn, transport, err := DialObfuscatedDCWithPool(&mtCfg, cfg.Queue, dc, res.ProtoTag, b.getPool())
+	dcConn, transport, err := DialObfuscatedDC(&mtCfg, cfg.Queue, dc, res.ProtoTag)
 	if err != nil {
 		if shouldLogDialError(dc) {
 			log.Errorf("MTProto transparent dial DC %d: %v", dc, err)

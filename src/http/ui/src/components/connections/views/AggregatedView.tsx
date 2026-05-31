@@ -68,7 +68,6 @@ export const AggregatedView = ({
   const [unmatchedOnly, setUnmatchedOnly] = useState(false);
   const [selectedMac, setSelectedMac] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [nowTick, setNowTick] = useState(() => Date.now());
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     return localStorage.getItem("b4_connections_sidebar_collapsed") === "1";
   });
@@ -79,13 +78,15 @@ export const AggregatedView = ({
 
   const state = useConnectionGroups(lines, deviceMap, paused);
 
-  useEffect(() => {
-    const id = globalThis.setInterval(() => setNowTick(Date.now()), 1000);
-    return () => globalThis.clearInterval(id);
-  }, []);
+  const now = useMemo(() => {
+    let latest = 0;
+    for (const g of state.groups) if (g.lastSeen > latest) latest = g.lastSeen;
+    for (const d of state.devices) if (d.lastSeen > latest) latest = d.lastSeen;
+    return latest;
+  }, [state.groups, state.devices]);
 
   const filteredGroups = useMemo(() => {
-    const cutoff = window === 0 ? 0 : nowTick - window * 1000;
+    const cutoff = window === 0 || now === 0 ? 0 : now - window * 1000;
     return state.groups.filter((g) => {
       if (cutoff > 0 && g.lastSeen < cutoff) return false;
       if (unmatchedOnly && (g.hostSet || g.ipSet)) return false;
@@ -94,7 +95,7 @@ export const AggregatedView = ({
       if (!matchesFilter(g, filter)) return false;
       return true;
     });
-  }, [state.groups, window, unmatchedOnly, showAll, selectedMac, filter, nowTick]);
+  }, [state.groups, window, unmatchedOnly, showAll, selectedMac, filter, now]);
 
   const sortedGroups = useMemo(
     () => [...filteredGroups].sort((a, b) => b.lastSeen - a.lastSeen || b.packets - a.packets),
@@ -107,9 +108,9 @@ export const AggregatedView = ({
   );
 
   const visibleDevices = useMemo(() => {
-    const cutoff = window === 0 ? 0 : nowTick - window * 1000;
+    const cutoff = window === 0 || now === 0 ? 0 : now - window * 1000;
     return state.devices.filter((d) => cutoff === 0 || d.lastSeen >= cutoff);
-  }, [state.devices, window, nowTick]);
+  }, [state.devices, window, now]);
 
   return (
     <Box sx={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -135,7 +136,7 @@ export const AggregatedView = ({
         />
         <GroupList
           groups={sortedGroups}
-          now={nowTick}
+          now={now}
           selectedKey={selectedKey}
           onSelect={(k) => setSelectedKey(k === selectedKey ? null : k)}
           onAddDomain={onAddDomain}

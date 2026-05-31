@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -34,6 +35,46 @@ var wsEdgeServedDCs = map[int]bool{2: true, 4: true}
 
 func wsEdgeServesDC(absDC int) bool {
 	return wsEdgeServedDCs[absDC]
+}
+
+// wsEdgeDefaultIPs are the IPs confirmed to serve Telegram's kws*.web.telegram.org
+// WS edge (the "web" front). Only a couple of DC2/DC4 IPs run the apiws endpoint;
+// the rest of the /24 are plain MTProto TCP and reject the TLS+WS upgrade. Dialing
+// a single one funnels every client connection onto one IP, tripping Telegram's
+// per-IP anti-flood (manifests as up=N down=0 / resPQ-then-RST). We rotate across
+// the set so a client's connection burst spreads instead of stacking on one IP.
+var wsEdgeDefaultIPs = []string{"149.154.167.220", "149.154.167.99"}
+
+var wsEdgeRR atomic.Uint32
+
+// wsEdgeDialHosts returns the candidate WS-edge IPs, rotated per call so successive
+// connections start on different IPs. An explicit WSEndpointHost (single non-default
+// IP, or a comma-separated list) is honored verbatim; the legacy default single IP
+// is treated as "unset" so it does not suppress rotation.
+func wsEdgeDialHosts(cfg *config.MTProtoConfig) []string {
+	var configured []string
+	for _, p := range strings.Split(cfg.WSEndpointHost, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			configured = append(configured, p)
+		}
+	}
+	if len(configured) > 1 || (len(configured) == 1 && configured[0] != telegramWSEdgeIP) {
+		return rotateHosts(configured)
+	}
+	return rotateHosts(wsEdgeDefaultIPs)
+}
+
+func rotateHosts(in []string) []string {
+	n := len(in)
+	if n <= 1 {
+		return in
+	}
+	start := int(wsEdgeRR.Add(1)) % n
+	out := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, in[(start+i)%n])
+	}
+	return out
 }
 
 // workerDomains parses the comma-separated CF Worker domain list from config.
@@ -223,17 +264,18 @@ func planTransports(cfg *config.MTProtoConfig, queueCfg config.QueueConfig, dc i
 	}
 
 	if (mode == "ws" || mode == "auto") && !wsIsBlacklisted(dc) {
-		edgeIP := strings.TrimSpace(cfg.WSEndpointHost)
-		if edgeIP == "" {
-			edgeIP = telegramWSEdgeIP
-		}
 		if wsEdgeServesDC(absDC) {
-			primary := transportPlan{kind: transportWS, dc: dc, sni: fmt.Sprintf("kws%d.web.telegram.org", absDC), dialHost: edgeIP}
-			media := transportPlan{kind: transportWS, dc: dc, sni: fmt.Sprintf("kws%d-1.web.telegram.org", absDC), dialHost: edgeIP}
+			hosts := wsEdgeDialHosts(cfg)
+			primarySNI := fmt.Sprintf("kws%d.web.telegram.org", absDC)
+			mediaSNI := fmt.Sprintf("kws%d-1.web.telegram.org", absDC)
+			sniOrder := []string{primarySNI, mediaSNI}
 			if dc < 0 {
-				plans = append(plans, media, primary)
-			} else {
-				plans = append(plans, primary, media)
+				sniOrder = []string{mediaSNI, primarySNI}
+			}
+			for _, sni := range sniOrder {
+				for _, h := range hosts {
+					plans = append(plans, transportPlan{kind: transportWS, dc: dc, sni: sni, dialHost: h})
+				}
 			}
 		}
 		// CF Worker (free per-user workers.dev relay). Tried after TG's own edge so
@@ -290,27 +332,6 @@ func planTransports(cfg *config.MTProtoConfig, queueCfg config.QueueConfig, dc i
 }
 
 func DialObfuscatedDC(cfg *config.MTProtoConfig, queueCfg config.QueueConfig, dc int, protoTag uint32) (*ObfuscatedConn, string, error) {
-	return DialObfuscatedDCWithPool(cfg, queueCfg, dc, protoTag, nil)
-}
-
-func DialObfuscatedDCWithPool(cfg *config.MTProtoConfig, queueCfg config.QueueConfig, dc int, protoTag uint32, pool *wsPool) (*ObfuscatedConn, string, error) {
-	if pool != nil && !wsIsBlacklisted(dc) {
-		if raw := pool.get(dc); raw != nil {
-			obf, err := completeObfuscation(raw, dc, protoTag)
-			if err == nil && raw.liveNow() {
-				log.Infof("MTProto DC %d connected via ws-pool", dc)
-				wsRecordSuccess(dc)
-				return obf, "ws-pool", nil
-			}
-			if err != nil {
-				log.Debugf("MTProto DC %d pool conn obf init failed: %v", dc, err)
-			} else {
-				log.Debugf("MTProto DC %d pool conn died before relay; re-dialing fresh", dc)
-			}
-			_ = raw.Close()
-		}
-	}
-
 	plans, err := planTransports(cfg, queueCfg, dc)
 	if err != nil {
 		return nil, "", err

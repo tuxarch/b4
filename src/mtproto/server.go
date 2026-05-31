@@ -27,7 +27,6 @@ type Server struct {
 
 	cfg    atomic.Pointer[config.Config]
 	secret atomic.Pointer[Secret]
-	wsPool atomic.Pointer[wsPool]
 
 	mu       sync.Mutex
 	running  bool
@@ -103,14 +102,6 @@ func (s *Server) startLocked() error {
 	if mode := mtCfg.UpstreamMode; mode == "ws" || mode == "auto" || mode == "" {
 		wsResetState()
 		tcpResetState()
-		pool := newWSPool(MTProtoUpstream{
-			WSEndpointHost: mtCfg.WSEndpointHost,
-			WSCustomDomain: mtCfg.WSCustomDomain,
-		}, cfg.Queue.Mark, wsPoolDefaultSize)
-		pool.warmup([]int{2, 4})
-		s.wsPool.Store(pool)
-	} else {
-		s.wsPool.Store(nil)
 	}
 
 	s.running = true
@@ -128,9 +119,6 @@ func (s *Server) stopLocked() error {
 	if s.cancel != nil {
 		s.cancel()
 		s.cancel = nil
-	}
-	if pool := s.wsPool.Swap(nil); pool != nil {
-		pool.close()
 	}
 	var err error
 	if s.listener != nil {
@@ -270,7 +258,7 @@ func (s *Server) handleConn(raw net.Conn) {
 	log.Debugf("MTProto client from %s wants DC %d proto=0x%08x", clientAddr, result.DC, result.ProtoTag)
 	_ = raw.SetDeadline(time.Time{})
 
-	dcConn, transport, err := DialObfuscatedDCWithPool(&cfg.System.MTProto, cfg.Queue, result.DC, result.ProtoTag, s.wsPool.Load())
+	dcConn, transport, err := DialObfuscatedDC(&cfg.System.MTProto, cfg.Queue, result.DC, result.ProtoTag)
 	if err != nil {
 		// throttle ERROR-level spam from a permanently-broken DC; full detail still goes to Debug
 		if shouldLogDialError(result.DC) {

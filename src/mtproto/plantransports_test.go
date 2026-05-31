@@ -26,16 +26,48 @@ func hasTCP(plans []transportPlan) bool {
 	return false
 }
 
+// uniqueWSSNIs returns the WS SNIs in first-seen order, deduped. Native-edge SNIs
+// now fan out across the rotated edge-IP set (one plan per IP), so callers that
+// care about SNI ordering, not per-IP duplication, use this.
+func uniqueWSSNIs(plans []transportPlan) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range wsSNIs(plans) {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// wsDialHostsForSNI returns the distinct dialHosts a given SNI fans out to.
+func wsDialHostsForSNI(plans []transportPlan, sni string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, p := range plans {
+		if p.kind == transportWS && p.sni == sni && !seen[p.dialHost] {
+			seen[p.dialHost] = true
+			out = append(out, p.dialHost)
+		}
+	}
+	return out
+}
+
 func TestPlanTransports_WSOnly_DC2(t *testing.T) {
 	cfg := &config.MTProtoConfig{UpstreamMode: "ws"}
 	plans, err := planTransports(cfg, config.QueueConfig{IPv4Enabled: true}, 2)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	got := wsSNIs(plans)
+	got := uniqueWSSNIs(plans)
 	want := []string{"kws2.web.telegram.org", "kws2-1.web.telegram.org"}
 	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
-		t.Fatalf("non-media DC 2 order: got %v want %v", got, want)
+		t.Fatalf("non-media DC 2 SNI order: got %v want %v", got, want)
+	}
+	// anti-funneling: each native-edge SNI must fan out across all edge IPs
+	if hosts := wsDialHostsForSNI(plans, want[0]); len(hosts) != len(wsEdgeDefaultIPs) {
+		t.Fatalf("primary SNI should dial all %d edge IPs, got %v", len(wsEdgeDefaultIPs), hosts)
 	}
 	if hasTCP(plans) {
 		t.Fatalf("ws-only mode should not include TCP for normal DC")
@@ -48,10 +80,10 @@ func TestPlanTransports_MediaDC_ReversesOrdering(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	got := wsSNIs(plans)
+	got := uniqueWSSNIs(plans)
 	want := []string{"kws4-1.web.telegram.org", "kws4.web.telegram.org"}
 	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
-		t.Fatalf("media DC -4 order: got %v want %v", got, want)
+		t.Fatalf("media DC -4 SNI order: got %v want %v", got, want)
 	}
 }
 
@@ -85,7 +117,7 @@ func TestPlanTransports_AutoMode_AlwaysIncludesTCPFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(wsSNIs(plans)) != 2 {
+	if len(uniqueWSSNIs(plans)) != 2 {
 		t.Fatalf("auto mode for DC 2 should include both kws plans")
 	}
 	if !hasTCP(plans) {
