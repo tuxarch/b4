@@ -341,7 +341,6 @@ func (a *API) updateConfig(w http.ResponseWriter, r *http.Request) {
 	_ = enc.Encode(response)
 }
 
-
 func (a *API) saveAndPushConfig(newCfg *config.Config) error {
 
 	if err := newCfg.Validate(); err != nil {
@@ -366,6 +365,18 @@ func (a *API) saveAndPushConfig(newCfg *config.Config) error {
 
 	if globalSocks5Server != nil {
 		globalSocks5Server.UpdateConfig(newCfg)
+	}
+
+	if globalMTProtoServer != nil {
+		globalMTProtoServer.UpdateConfig(newCfg)
+	}
+
+	if globalMTProtoBridge != nil {
+		globalMTProtoBridge.UpdateConfig(newCfg)
+	}
+
+	if mtprotoCFRefreshFunc != nil {
+		mtprotoCFRefreshFunc(newCfg)
 	}
 
 	err := newCfg.SaveToFile(newCfg.ConfigPath)

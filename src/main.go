@@ -117,6 +117,9 @@ func runB4(cmd *cobra.Command, args []string) error {
 	var cfgPtr atomic.Pointer[config.Config]
 	cfgPtr.Store(&cfg)
 
+	appCtx, appCancel := context.WithCancel(context.Background())
+	defer appCancel()
+
 	aiManager := ai.NewManager(cfg.System.AI, cfg.ConfigPath)
 	handler.SetAIManager(aiManager)
 
@@ -124,6 +127,18 @@ func runB4(cmd *cobra.Command, args []string) error {
 
 	tproxyResolver := tproxy.NewLearnedIPResolver(nil)
 	tproxyMgr := tproxy.NewManager(tproxyResolver)
+
+	mtprotoBridge := mtproto.NewTransparentBridge(&cfg)
+	tproxyMgr.SetMTProtoBridge(mtprotoBridge)
+	handler.SetMTProtoBridge(mtprotoBridge)
+	go func() { _ = mtproto.RefreshDCs() }()
+	startCFRefresh := func(c *config.Config) {
+		if c.System.MTProto.CFProxyEnabled {
+			mtproto.StartCFProxyRefresh(appCtx, c.System.MTProto.CFProxyURL)
+		}
+	}
+	startCFRefresh(&cfg)
+	handler.SetMTProtoCFRefreshFunc(startCFRefresh)
 
 	handler.SetTablesRefreshFunc(func() error {
 		c := cfgPtr.Load()
@@ -268,6 +283,7 @@ func runB4(cmd *cobra.Command, args []string) error {
 		metrics.RecordEvent("error", fmt.Sprintf("Failed to start MTProto server: %v", err))
 		log.Errorf("MTProto server did not start: %v (b4 continues without it; fix in Settings or config)", err)
 	}
+	handler.SetMTProtoServer(mtprotoServer)
 
 	wd := watchdog.New(&cfgPtr, discoveryRT, func(c *config.Config) error {
 		if err := c.Validate(); err != nil {
@@ -282,6 +298,9 @@ func runB4(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("failed to save config: %v", err)
 		}
 		cfgPtr.Store(c)
+		mtprotoServer.UpdateConfig(c)
+		mtprotoBridge.UpdateConfig(c)
+		startCFRefresh(c)
 		tproxyResolver.Set(pool.GetMatcher())
 		tproxyMgr.SyncConfig(c)
 		tables.RoutingSyncConfig(c)

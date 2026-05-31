@@ -22,7 +22,7 @@ func (api *API) RegisterMTProtoApi() {
 // @Tags MTProto
 // @Accept json
 // @Produce json
-// @Param body body object false "optional overrides: upstream_mode, ws_custom_domain, dc"
+// @Param body body object false "optional overrides: upstream_mode, ws_custom_domain, ws_endpoint_host, cfworker_domain, cfproxy_enabled, dc_relay, dc"
 // @Success 200 {object} map[string]interface{}
 // @Security BearerAuth
 // @Router /mtproto/test-ws [post]
@@ -35,6 +35,8 @@ func (api *API) handleMTProtoTestWS(w http.ResponseWriter, r *http.Request) {
 		UpstreamMode   string  `json:"upstream_mode"`
 		WSCustomDomain *string `json:"ws_custom_domain"`
 		WSEndpointHost *string `json:"ws_endpoint_host"`
+		CFWorkerDomain *string `json:"cfworker_domain"`
+		CFProxyEnabled *bool   `json:"cfproxy_enabled"`
 		DCRelay        *string `json:"dc_relay"`
 		DC             int     `json:"dc"`
 	}
@@ -60,6 +62,12 @@ func (api *API) handleMTProtoTestWS(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.WSEndpointHost != nil {
 		probeCfg.WSEndpointHost = *req.WSEndpointHost
+	}
+	if req.CFWorkerDomain != nil {
+		probeCfg.CFWorkerDomain = *req.CFWorkerDomain
+	}
+	if req.CFProxyEnabled != nil {
+		probeCfg.CFProxyEnabled = *req.CFProxyEnabled
 	}
 	if req.DCRelay != nil {
 		probeCfg.DCRelay = *req.DCRelay
@@ -219,12 +227,12 @@ func (api *API) updateMTProtoConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := api.getCfg()
-	cfg.System.MTProto = req
+	cur := api.getCfg()
+	newCfg := cur.Clone()
+	newCfg.System.MTProto = req
 
-	if err := cfg.SaveToFile(cfg.ConfigPath); err != nil {
-		log.Errorf("Failed to save MTProto config: %v", err)
-		writeJsonError(w, http.StatusInternalServerError, "Failed to save configuration")
+	if err := api.saveAndPushConfig(newCfg); err != nil {
+		writeAPIError(w, err)
 		return
 	}
 
@@ -232,6 +240,6 @@ func (api *API) updateMTProtoConfig(w http.ResponseWriter, r *http.Request) {
 
 	sendResponse(w, map[string]interface{}{
 		"success": true,
-		"message": "MTProto configuration updated. Restart required for changes to take effect.",
+		"message": "MTProto configuration updated and applied.",
 	})
 }

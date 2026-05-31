@@ -62,6 +62,7 @@ func (c *wsConn) Read(p []byte) (int, error) {
 		c.rxBuf = c.rxBuf[n:]
 		return n, nil
 	}
+	var assembled []byte // accumulates fragmented data frames until FIN
 	for {
 		op, fin, payload, err := c.readFrame()
 		if err != nil {
@@ -69,14 +70,34 @@ func (c *wsConn) Read(p []byte) (int, error) {
 		}
 		switch op {
 		case wsOpcodeBinary, 0x1:
+			// fragmented data frame: start accumulating; continuation frames will follow
 			if !fin {
-				return 0, errors.New("ws: fragmented data frames not supported")
+				assembled = append(assembled, payload...)
+				continue
 			}
-			n := copy(p, payload)
-			if n < len(payload) {
-				c.rxBuf = append(c.rxBuf, payload[n:]...)
+			full := payload
+			if len(assembled) > 0 {
+				full = append(assembled, payload...)
+				assembled = nil
+			}
+			n := copy(p, full)
+			if n < len(full) {
+				c.rxBuf = append(c.rxBuf, full[n:]...)
 			}
 			return n, nil
+		case 0x0: // continuation frame
+			if assembled == nil {
+				return 0, errors.New("ws: continuation frame without prior data frame")
+			}
+			assembled = append(assembled, payload...)
+			if fin {
+				n := copy(p, assembled)
+				if n < len(assembled) {
+					c.rxBuf = append(c.rxBuf, assembled[n:]...)
+				}
+				assembled = nil
+				return n, nil
+			}
 		case wsOpcodePing:
 			if err := c.writeFrame(wsOpcodePong, payload); err != nil {
 				return 0, err
@@ -107,6 +128,59 @@ func (c *wsConn) Close() error {
 		_ = c.writeFrame(wsOpcodeClose, nil)
 	}
 	return c.tls.Close()
+}
+
+// alive does a non-destructive liveness check on the conn. Pool entries can
+// sit idle long enough for TG to FIN/RST them; handing such a conn to a client
+// causes up=N down=0 short-lived sessions, which break short RPCs (notably
+// auth.importAuthorization on secondary DCs - the exact path that makes
+// foreign-channel media downloads fail). Cheap (~few ms) since FIN/RST is
+// already in the kernel buffer if it happened.
+func (c *wsConn) alive() bool {
+	if c.closed.Load() {
+		return false
+	}
+	if err := c.tls.SetReadDeadline(time.Now().Add(5 * time.Millisecond)); err != nil {
+		return false
+	}
+	defer func() { _ = c.tls.SetReadDeadline(time.Time{}) }()
+	buf, err := c.br.Peek(1)
+	if err == nil && len(buf) >= 1 {
+		// any buffered byte indicates the conn is alive; reject if it's a CLOSE frame
+		if buf[0]&0x0F == wsOpcodeClose {
+			return false
+		}
+		return true
+	}
+	if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		return true
+	}
+	return false
+}
+
+// liveNow is a zero-wait liveness poll used right after the obfuscated handshake
+// is written to a pooled conn, to catch conns Telegram FIN/RST'd between the
+// pool's alive() check and the relay's first write (the up=N down=0 in ~1ms
+// failure). Uses an already-expired read deadline so Peek returns immediately:
+// a pending FIN/RST surfaces as a non-timeout error (dead), an idle-but-open
+// conn surfaces as a timeout (alive). Peek does not consume, so buffered data is
+// preserved for the relay. Cost is microseconds, unlike alive()'s 5ms wait.
+func (c *wsConn) liveNow() bool {
+	if c.closed.Load() {
+		return false
+	}
+	if err := c.tls.SetReadDeadline(time.Now().Add(-time.Second)); err != nil {
+		return false
+	}
+	defer func() { _ = c.tls.SetReadDeadline(time.Time{}) }()
+	buf, err := c.br.Peek(1)
+	if err == nil && len(buf) >= 1 {
+		return buf[0]&0x0F != wsOpcodeClose
+	}
+	if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		return true
+	}
+	return false
 }
 
 func (c *wsConn) LocalAddr() net.Addr  { return c.tls.LocalAddr() }
@@ -182,27 +256,25 @@ func (c *wsConn) writeFrame(op byte, payload []byte) error {
 	if _, err := rand.Read(hdr[off : off+4]); err != nil {
 		return err
 	}
-	maskKey := hdr[off : off+4]
 	off += 4
 
-	masked := make([]byte, n)
-	for i := range payload {
-		masked[i] = payload[i] ^ maskKey[i%4]
+	// single buffer + single tls.Write to avoid emitting two TLS records per frame
+	buf := make([]byte, off+n)
+	copy(buf, hdr[:off])
+	maskKey := buf[off-4 : off]
+	for i := 0; i < n; i++ {
+		buf[off+i] = payload[i] ^ maskKey[i%4]
 	}
 	c.wMu.Lock()
 	defer c.wMu.Unlock()
-	if _, err := c.tls.Write(hdr[:off]); err != nil {
-		return err
-	}
-	if n > 0 {
-		if _, err := c.tls.Write(masked); err != nil {
-			return err
-		}
-	}
-	return nil
+	_, err := c.tls.Write(buf)
+	return err
 }
 
-func dialWS(host, sni string, timeout time.Duration, mark uint) (net.Conn, error) {
+func dialWS(host, sni, path string, timeout time.Duration, mark uint) (net.Conn, error) {
+	if path == "" {
+		path = "/apiws"
+	}
 	dialer := &net.Dialer{Timeout: timeout}
 	if mark > 0 {
 		dialer.Control = func(network, address string, c syscall.RawConn) error {
@@ -221,10 +293,19 @@ func dialWS(host, sni string, timeout time.Duration, mark uint) (net.Conn, error
 	}
 	if tc, ok := raw.(*net.TCPConn); ok {
 		_ = tc.SetNoDelay(true)
+		// match tg-ws-proxy: 256KB send/recv buffers - kernel default (~87KB recv,
+		// ~16KB send) limits BDP for big media transfers from EU TG edge
+		_ = tc.SetReadBuffer(256 * 1024)
+		_ = tc.SetWriteBuffer(256 * 1024)
 	}
+	// Telegram's WS edge only presents proper certs for kws2/kws4; kws1/kws3/kws5
+	// fall back to a *.telegram.org cert that doesn't match the 3-label SNI.
+	// Cert verification adds no real security here - the MTProto payload is
+	// already end-to-end encrypted with the proxy secret. Match tg-ws-proxy.
 	tlsConn := tls.Client(raw, &tls.Config{
-		ServerName: sni,
-		MinVersion: tls.VersionTLS12,
+		ServerName:         sni,
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: true,
 	})
 	_ = tlsConn.SetDeadline(time.Now().Add(timeout))
 	if err := tlsConn.Handshake(); err != nil {
@@ -239,7 +320,7 @@ func dialWS(host, sni string, timeout time.Duration, mark uint) (net.Conn, error
 	}
 	wsKey := base64.StdEncoding.EncodeToString(keyBytes)
 
-	req := "GET /apiws HTTP/1.1\r\n" +
+	req := "GET " + path + " HTTP/1.1\r\n" +
 		"Host: " + sni + "\r\n" +
 		"Upgrade: websocket\r\n" +
 		"Connection: Upgrade\r\n" +

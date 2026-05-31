@@ -299,6 +299,9 @@ export interface MTProtoConfig {
   upstream_mode: "tcp" | "ws" | "auto";
   ws_custom_domain: string;
   ws_endpoint_host: string;
+  cfproxy_enabled: boolean;
+  cfproxy_url: string;
+  cfworker_domain: string;
 }
 
 
@@ -377,7 +380,7 @@ export interface DNSConfig {
   fragment_query: boolean;
 }
 
-export type RoutingMode = "interface" | "proxy";
+export type RoutingMode = "interface" | "proxy" | "mtproto-ws";
 
 export interface UpstreamProxyConfig {
   host: string;

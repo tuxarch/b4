@@ -17,7 +17,12 @@ const FakePayloadAutoQUIC = "@quic_initial"
 const (
 	RoutingModeInterface = "interface"
 	RoutingModeProxy     = "proxy"
+	RoutingModeMTProtoWS = "mtproto-ws"
 )
+
+func RoutingUsesTProxy(mode string) bool {
+	return mode == RoutingModeProxy || mode == RoutingModeMTProtoWS
+}
 
 const (
 	FakePayloadRandom = iota
@@ -226,6 +231,9 @@ type MTProtoConfig struct {
 	UpstreamMode   string `json:"upstream_mode"`
 	WSCustomDomain string `json:"ws_custom_domain"`
 	WSEndpointHost string `json:"ws_endpoint_host"`
+	CFProxyEnabled bool   `json:"cfproxy_enabled"` // enable Cloudflare-proxied fallback WS domains (rescues DCs the network blocks)
+	CFProxyURL     string `json:"cfproxy_url"`     // URL to refresh CF-proxy domain list; empty = built-in default
+	CFWorkerDomain string `json:"cfworker_domain"` // user's Cloudflare Worker domain(s) (workers.dev), comma-separated; free per-user WS relay tried before the shared CF pool
 }
 
 type Socks5Config struct {

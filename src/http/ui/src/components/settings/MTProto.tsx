@@ -6,6 +6,7 @@ import {
   CircularProgress,
   IconButton,
   InputAdornment,
+  Link,
   Tooltip,
   Typography,
   Chip,
@@ -169,6 +170,8 @@ export const MTProtoSettings = ({ config, onChange }: MTProtoSettingsProps) => {
           upstream_mode: config.system.mtproto?.upstream_mode || "auto",
           ws_custom_domain: config.system.mtproto?.ws_custom_domain || "",
           ws_endpoint_host: config.system.mtproto?.ws_endpoint_host || "",
+          cfworker_domain: config.system.mtproto?.cfworker_domain || "",
+          cfproxy_enabled: config.system.mtproto?.cfproxy_enabled ?? true,
           dc: 2,
           ...overrides,
         }),
@@ -218,7 +221,11 @@ export const MTProtoSettings = ({ config, onChange }: MTProtoSettingsProps) => {
       description={t("settings.MTProto.description")}
       icon={<ConnectionIcon />}
     >
-      <B4FormGroup label={t("settings.MTProto.settings")} columns={2}>
+      <B4FormGroup
+        label={t("settings.MTProto.settings")}
+        description={t("settings.MTProto.serverDesc")}
+        columns={2}
+      >
         <B4Switch
           label={t("settings.MTProto.enable")}
           checked={config.system.mtproto?.enabled ?? false}
@@ -227,11 +234,6 @@ export const MTProtoSettings = ({ config, onChange }: MTProtoSettingsProps) => {
           }
           description={t("settings.MTProto.enableDesc")}
         />
-        {config.system.mtproto?.enabled && (
-          <B4Alert severity="warning">
-            {t("settings.MTProto.restartNote")}
-          </B4Alert>
-        )}
         <B4TextField
           label={t("settings.MTProto.bindAddress")}
           value={config.system.mtproto?.bind_address || "0.0.0.0"}
@@ -314,9 +316,7 @@ export const MTProtoSettings = ({ config, onChange }: MTProtoSettingsProps) => {
       </B4FormGroup>
       {(() => {
         const mode = config.system.mtproto?.upstream_mode || "auto";
-        const enabled = !!config.system.mtproto?.enabled;
-        const showDcRelay =
-          !!dcRelay || mode === "tcp" || mode === "auto";
+        const showDcRelay = !!dcRelay || mode === "tcp" || mode === "auto";
         return (
           <B4FormGroup
             label={t("settings.MTProto.upstreamTitle")}
@@ -329,19 +329,18 @@ export const MTProtoSettings = ({ config, onChange }: MTProtoSettingsProps) => {
               onChange={(e) =>
                 onChange("system.mtproto.upstream_mode", String(e.target.value))
               }
-              disabled={!enabled}
               options={[
                 { value: "tcp", label: t("settings.MTProto.upstreamTcp") },
                 { value: "auto", label: t("settings.MTProto.upstreamAuto") },
                 { value: "ws", label: t("settings.MTProto.upstreamWs") },
               ]}
-              helperText={
+              helperText={`${
                 mode === "auto" && dcRelay
                   ? t("settings.MTProto.upstreamAutoRelayDesc")
                   : t(
                       `settings.MTProto.upstream${upstreamDescSuffix(mode)}Desc`,
                     )
-              }
+              } ${t("settings.MTProto.upstreamBridgeNote")}`}
             />
             {showDcRelay && (
               <B4TextField
@@ -351,7 +350,6 @@ export const MTProtoSettings = ({ config, onChange }: MTProtoSettingsProps) => {
                   onChange("system.mtproto.dc_relay", e.target.value)
                 }
                 placeholder="vps-ip:7007"
-                disabled={!enabled}
                 helperText={t("settings.MTProto.dcRelayHelp")}
                 selectOnFocus
                 slotProps={{
@@ -365,7 +363,6 @@ export const MTProtoSettings = ({ config, onChange }: MTProtoSettingsProps) => {
                             <IconButton
                               size="small"
                               onClick={openRelayHelp}
-                              disabled={!enabled}
                               sx={{ px: 0 }}
                             >
                               <HelpOutlineIcon fontSize="small" />
@@ -378,29 +375,55 @@ export const MTProtoSettings = ({ config, onChange }: MTProtoSettingsProps) => {
                 }}
               />
             )}
-            {mode !== "tcp" && (
+            <B4TextField
+              label={t("settings.MTProto.cfWorkerDomain")}
+              value={config.system.mtproto?.cfworker_domain || ""}
+              onChange={(e) =>
+                onChange("system.mtproto.cfworker_domain", e.target.value)
+              }
+              placeholder="my-worker-1234.username.workers.dev"
+              helperText={t("settings.MTProto.cfWorkerDomainHelp")}
+              selectOnFocus
+              slotProps={{
+                input: {
+                  endAdornment: (
+                    <InputAdornment position="end" sx={{ mr: -0.5 }}>
+                      <Tooltip title={t("settings.MTProto.cfWorkerSetup")}>
+                        <span style={{ display: "inline-flex" }}>
+                          <IconButton
+                            size="small"
+                            component="a"
+                            href="https://github.com/Flowseal/tg-ws-proxy/blob/main/docs/CfWorker.md"
+                            target="_blank"
+                            rel="noreferrer"
+                            sx={{ px: 0 }}
+                          >
+                            <OpenInNewIcon fontSize="small" />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                    </InputAdornment>
+                  ),
+                },
+              }}
+            />
+            <B4Switch
+              label={t("settings.MTProto.cfProxyEnabled")}
+              checked={config.system.mtproto?.cfproxy_enabled ?? true}
+              onChange={(checked: boolean) =>
+                onChange("system.mtproto.cfproxy_enabled", checked)
+              }
+              description={t("settings.MTProto.cfProxyEnabledHelp")}
+            />
+            {config.system.mtproto?.cfproxy_enabled !== false && (
               <B4TextField
-                label={t("settings.MTProto.wsCustomDomain")}
-                value={config.system.mtproto?.ws_custom_domain || ""}
+                label={t("settings.MTProto.cfProxyURL")}
+                value={config.system.mtproto?.cfproxy_url || ""}
                 onChange={(e) =>
-                  onChange("system.mtproto.ws_custom_domain", e.target.value)
+                  onChange("system.mtproto.cfproxy_url", e.target.value)
                 }
-                placeholder="your-domain.com"
-                disabled={!enabled}
-                helperText={t("settings.MTProto.wsCustomDomainHelp")}
-                selectOnFocus
-              />
-            )}
-            {mode !== "tcp" && (
-              <B4TextField
-                label={t("settings.MTProto.wsEndpointHost")}
-                value={config.system.mtproto?.ws_endpoint_host || ""}
-                onChange={(e) =>
-                  onChange("system.mtproto.ws_endpoint_host", e.target.value)
-                }
-                placeholder="149.154.167.220"
-                disabled={!enabled}
-                helperText={t("settings.MTProto.wsEndpointHostHelp")}
+                placeholder="https://raw.githubusercontent.com/Flowseal/tg-ws-proxy/main/.github/cfproxy-domains.txt"
+                helperText={t("settings.MTProto.cfProxyURLHelp")}
                 selectOnFocus
               />
             )}
@@ -417,9 +440,7 @@ export const MTProtoSettings = ({ config, onChange }: MTProtoSettingsProps) => {
                     )
                   }
                   onClick={() => void handleTestWS()}
-                  disabled={
-                    !config.system.mtproto?.enabled || wsTesting !== null
-                  }
+                  disabled={wsTesting !== null}
                 >
                   {wsTesting === "configured"
                     ? t("settings.MTProto.testWsRunning")
@@ -436,9 +457,7 @@ export const MTProtoSettings = ({ config, onChange }: MTProtoSettingsProps) => {
                         ) : undefined
                       }
                       onClick={() => void handleTestDirectTCP()}
-                      disabled={
-                        !config.system.mtproto?.enabled || wsTesting !== null
-                      }
+                      disabled={wsTesting !== null}
                     >
                       {wsTesting === "direct"
                         ? t("settings.MTProto.testWsRunning")
@@ -501,6 +520,22 @@ export const MTProtoSettings = ({ config, onChange }: MTProtoSettingsProps) => {
           </B4FormGroup>
         );
       })()}
+      <Typography variant="caption">
+        {t("settings.MTProto.credit")}{" "}
+        <Link
+          href="https://github.com/Flowseal/tg-ws-proxy"
+          target="_blank"
+          rel="noreferrer"
+          sx={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 0.25,
+          }}
+        >
+          tg-ws-proxy
+          <OpenInNewIcon sx={{ fontSize: 12 }} />
+        </Link>
+      </Typography>
       <B4Dialog
         open={shareOpen}
         onClose={() => setShareOpen(false)}

@@ -1,5 +1,10 @@
 # B4 - Bye Bye Big Bro
 
+## [1.64.0] - 2026-05-31
+
+- IMPROVED: **MTProto Telegram routing is more reliable, especially for media** - the WebSocket routing (bridge mode) now works on phones as well as desktop, loads media more reliably, and always prefers WebSocket regardless of the proxy server's transport setting. Data centers without a WebSocket edge no longer stall when the shared fallback domains get rate-limited. New "Cloudflare Worker" support adds a free, per-user relay (no domain to buy) for accounts where media, reactions, or stickers still fail to load - see Settings -> MTProto Proxy.
+- FIXED: **Copy buttons did nothing when the Web UI was opened over plain HTTP** - copying commands, set exports, or system info silently failed on installs reached by LAN IP (for example `http://192.168.1.1`), because browsers only allow the modern clipboard API over HTTPS or localhost. The fallback copy path now works in those cases too.
+
 ## [1.63.0] - 2026-05-22
 
 - FIXED: **Geo databases sometimes saved to a broken `b4` folder after install** - in rare cases the installer would record `b4/geosite.dat` instead of a full path like `/etc/b4/geosite.dat`, and the Web UI then refused to download new files. The installer now refuses non-absolute paths, b4 fixes any broken path it finds on startup, and the UI falls back to a safe default if the stored path looks wrong.

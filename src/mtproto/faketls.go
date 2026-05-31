@@ -23,7 +23,6 @@ const (
 	handshakeServerHello  = 0x02
 	maxTLSRecordPayload   = 16379
 	timestampTolerance    = 120
-	secondDuration        = time.Second
 )
 
 type FakeTLSConn struct {
@@ -249,7 +248,6 @@ func buildServerHello(secret *Secret, clientRandom, sessionID []byte) []byte {
 	rand.Read(x25519Key)
 
 	var extensions bytes.Buffer
-	extensions.Write([]byte{0x00, 0x2b, 0x00, 0x02, 0x03, 0x04})
 	keyShareData := make([]byte, 0, 36)
 	keyShareData = append(keyShareData, 0x00, 0x1d, 0x00, 0x20)
 	keyShareData = append(keyShareData, x25519Key...)
@@ -257,6 +255,7 @@ func buildServerHello(secret *Secret, clientRandom, sessionID []byte) []byte {
 	extLen := len(keyShareData)
 	extensions.Write([]byte{byte(extLen >> 8), byte(extLen)})
 	extensions.Write(keyShareData)
+	extensions.Write([]byte{0x00, 0x2b, 0x00, 0x02, 0x03, 0x04})
 
 	extBytes := extensions.Bytes()
 	shBody.Write([]byte{byte(len(extBytes) >> 8), byte(len(extBytes))})
