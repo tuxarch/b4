@@ -70,6 +70,18 @@ function normalizeMac(mac: string): string {
   return mac.toUpperCase().replaceAll("-", ":");
 }
 
+function stripPort(addr: string): string {
+  if (!addr) return addr;
+  if (addr.startsWith("[")) {
+    const end = addr.indexOf("]");
+    return end > 0 ? addr.slice(1, end) : addr.slice(1);
+  }
+  const firstColon = addr.indexOf(":");
+  if (firstColon !== -1 && firstColon === addr.lastIndexOf(":"))
+    return addr.slice(0, firstColon);
+  return addr;
+}
+
 function bucketIndex(ts: number, now: number): number {
   const offset = Math.floor((now - ts) / BUCKET_SIZE_MS);
   if (offset < 0 || offset >= bucketCount) return -1;
@@ -106,7 +118,9 @@ function ingest(lines: string[]): void {
     const p = parseLine(line);
     if (!p) continue;
 
-    const mac = p.sourceAlias ? normalizeMac(p.sourceAlias) : "";
+    const mac = p.sourceAlias
+      ? normalizeMac(p.sourceAlias)
+      : stripPort(p.source);
     const groupIdent = p.domain || p.destination || "?";
     const key = `${mac}|${p.protocol}|${groupIdent}`;
 
@@ -126,7 +140,7 @@ function ingest(lines: string[]): void {
         packets: 0,
         firstSeen: p.timestamp,
         lastSeen: p.timestamp,
-        buckets: new Array(bucketCount).fill(0),
+        buckets: new Array<number>(bucketCount).fill(0),
       };
       groups.set(key, g);
     }
@@ -153,7 +167,7 @@ function ingest(lines: string[]): void {
         packets: 0,
         groups: 0,
         lastSeen: p.timestamp,
-        buckets: new Array(bucketCount).fill(0),
+        buckets: new Array<number>(bucketCount).fill(0),
       };
       devices.set(mac, d);
     }
