@@ -38,9 +38,14 @@ export function useConnectionGroups(
   lines: string[],
   deviceMap: Record<string, string>,
   paused: boolean,
+  ipToMac: Record<string, string> = {},
 ): GroupsState {
   const workerRef = useRef<Worker | null>(null);
   const lastSentinelRef = useRef<string | null>(null);
+  const linesRef = useRef<string[]>(lines);
+  const pausedRef = useRef<boolean>(paused);
+  linesRef.current = lines;
+  pausedRef.current = paused;
   const [snapshot, setSnapshot] = useState<AggregatorSnapshot | null>(null);
 
   useEffect(() => {
@@ -57,6 +62,22 @@ export function useConnectionGroups(
       workerRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    const w = workerRef.current;
+    if (!w) return;
+    const setMsg: AggregatorInput = { type: "setIpToMac", map: ipToMac };
+    w.postMessage(setMsg);
+    if (pausedRef.current) return;
+    const clearMsg: AggregatorInput = { type: "clear" };
+    w.postMessage(clearMsg);
+    const all = linesRef.current;
+    if (all.length > 0) {
+      const ingestMsg: AggregatorInput = { type: "ingest", lines: all };
+      w.postMessage(ingestMsg);
+    }
+    lastSentinelRef.current = all.at(-1) ?? null;
+  }, [ipToMac]);
 
   useEffect(() => {
     const w = workerRef.current;

@@ -36,7 +36,6 @@ func wsEdgeServesDC(absDC int) bool {
 	return wsEdgeServedDCs[absDC]
 }
 
-// workerDomains parses the comma-separated CF Worker domain list from config.
 func workerDomains(cfg *config.MTProtoConfig) []string {
 	raw := strings.TrimSpace(cfg.CFWorkerDomain)
 	if raw == "" {
@@ -51,8 +50,6 @@ func workerDomains(cfg *config.MTProtoConfig) []string {
 	return out
 }
 
-// workerDstIP returns the canonical public DC IP the worker should TCP-connect to
-// (the worker's ?dst= target). Mirrors tg-ws-proxy DC_DEFAULT_IPS.
 func workerDstIP(absDC int) string {
 	addr, ok := dcAddressesV4[absDC]
 	if !ok {
@@ -169,9 +166,9 @@ type transportPlan struct {
 	sni      string
 	dialHost string
 	dc       int
-	cfBase   string // CF-proxy base domain (without "kwsN."); set => pin in balancer on success
-	wsPath   string // WS request path; "" defaults to /apiws. CF Worker uses /apiws?dst=&dc=
-	isWorker bool   // CF Worker plan: dedicated per-user relay, reaches any DC via ?dst=
+	cfBase   string
+	wsPath   string
+	isWorker bool
 }
 
 func (p transportPlan) describe() string {
@@ -227,7 +224,7 @@ func planTransports(cfg *config.MTProtoConfig, queueCfg config.QueueConfig, dc i
 		if edgeIP == "" {
 			edgeIP = telegramWSEdgeIP
 		}
-		if wsEdgeServesDC(absDC) {
+		if wsEdgeServesDC(absDC) && !cfg.BridgeSkipNativeEdge {
 			primary := transportPlan{kind: transportWS, dc: dc, sni: fmt.Sprintf("kws%d.web.telegram.org", absDC), dialHost: edgeIP}
 			media := transportPlan{kind: transportWS, dc: dc, sni: fmt.Sprintf("kws%d-1.web.telegram.org", absDC), dialHost: edgeIP}
 			if dc < 0 {
@@ -236,11 +233,6 @@ func planTransports(cfg *config.MTProtoConfig, queueCfg config.QueueConfig, dc i
 				plans = append(plans, primary, media)
 			}
 		}
-		// CF Worker (free per-user workers.dev relay). Tried after TG's own edge so
-		// the fast native path wins for DC2/4, but before the shared CF pool so DCs
-		// without a native edge (1/3/5) and throttled cases use the dedicated worker
-		// instead of the rate-limited shared domains. The worker reaches any DC via
-		// ?dst=<canonical DC IP>&dc=<n> (matches tg-ws-proxy CfWorker mode).
 		if dst := workerDstIP(absDC); dst != "" {
 			for _, wd := range workerDomains(cfg) {
 				plans = append(plans, transportPlan{
@@ -261,8 +253,6 @@ func planTransports(cfg *config.MTProtoConfig, queueCfg config.QueueConfig, dc i
 				cfBase: d,
 			})
 		}
-		// CF-proxy fallback pool (matches tg-ws-proxy). Tried after TG's own edge so
-		// the fast path wins when it works; CF rescues DCs the network blocks (esp. DC 1).
 		if cfg.CFProxyEnabled {
 			for _, base := range cfBalancerInst.domainsForDC(dc) {
 				plans = append(plans, transportPlan{
@@ -290,22 +280,23 @@ func planTransports(cfg *config.MTProtoConfig, queueCfg config.QueueConfig, dc i
 }
 
 func DialObfuscatedDC(cfg *config.MTProtoConfig, queueCfg config.QueueConfig, dc int, protoTag uint32) (*ObfuscatedConn, string, error) {
-	return DialObfuscatedDCWithPool(cfg, queueCfg, dc, protoTag, nil)
+	return DialObfuscatedDCWithPool(cfg, queueCfg, dc, protoTag, nil, "")
 }
 
-func DialObfuscatedDCWithPool(cfg *config.MTProtoConfig, queueCfg config.QueueConfig, dc int, protoTag uint32, pool *wsPool) (*ObfuscatedConn, string, error) {
+func DialObfuscatedDCWithPool(cfg *config.MTProtoConfig, queueCfg config.QueueConfig, dc int, protoTag uint32, pool *wsPool, logID string) (*ObfuscatedConn, string, error) {
+	tag := tg(logID)
 	if pool != nil && !wsIsBlacklisted(dc) {
 		if raw := pool.get(dc); raw != nil {
 			obf, err := completeObfuscation(raw, dc, protoTag)
 			if err == nil && raw.liveNow() {
-				log.Infof("MTProto DC %d connected via ws-pool", dc)
+				log.Infof("%s DC %d connected via ws-pool", tag, dc)
 				wsRecordSuccess(dc)
 				return obf, "ws-pool", nil
 			}
 			if err != nil {
-				log.Debugf("MTProto DC %d pool conn obf init failed: %v", dc, err)
+				log.Debugf("%s DC %d pool conn obf init failed: %v", tag, dc, err)
 			} else {
-				log.Debugf("MTProto DC %d pool conn died before relay; re-dialing fresh", dc)
+				log.Debugf("%s DC %d pool conn died before relay; re-dialing fresh", tag, dc)
 			}
 			_ = raw.Close()
 		}
@@ -325,7 +316,7 @@ func DialObfuscatedDCWithPool(cfg *config.MTProtoConfig, queueCfg config.QueueCo
 	wsTried := 0
 	wsRedirects := 0
 	for _, p := range plans {
-		log.Debugf("MTProto DC %d dialing %s", dc, p.describe())
+		log.Debugf("%s DC %d dialing %s", tag, dc, p.describe())
 		start := time.Now()
 		var conn net.Conn
 		var derr error
@@ -347,29 +338,27 @@ func DialObfuscatedDCWithPool(cfg *config.MTProtoConfig, queueCfg config.QueueCo
 			} else if isDialTimeout(derr) {
 				tcpRecordFailure(p.addr)
 			}
-			log.Debugf("MTProto DC %d %s failed after %dms: %v", dc, p.describe(), time.Since(start).Milliseconds(), derr)
+			log.Debugf("%s DC %d %s failed after %dms: %v", tag, dc, p.describe(), time.Since(start).Milliseconds(), derr)
 			continue
 		}
 		obfConn, oerr := completeObfuscation(conn, dc, protoTag)
 		if oerr != nil {
 			attempts = append(attempts, fmt.Sprintf("%s: %s", p.describe(), shortErr(oerr)))
 			conn.Close()
-			log.Debugf("MTProto DC %d obf init failed on %s: %v", dc, p.describe(), oerr)
+			log.Debugf("%s DC %d obf init failed on %s: %v", tag, dc, p.describe(), oerr)
 			continue
 		}
 		if p.kind == transportWS {
 			wsRecordSuccess(dc)
-			// pin successful CF-proxy domain for this DC so subsequent connections
-			// try it first (mirrors tg-ws-proxy/proxy/balancer.py:update_domain_for_dc)
 			if p.cfBase != "" {
 				if cfBalancerInst.pin(dc, p.cfBase) {
-					log.Infof("MTProto DC %d switched active CF domain to %s", dc, p.cfBase)
+					log.Infof("%s DC %d switched active CF domain to %s", tag, dc, p.cfBase)
 				}
 			}
 		} else {
 			tcpRecordSuccess(p.addr)
 		}
-		log.Infof("MTProto DC %d connected via %s in %dms", dc, p.describe(), time.Since(start).Milliseconds())
+		log.Infof("%s DC %d connected via %s in %dms", tag, dc, p.describe(), time.Since(start).Milliseconds())
 		return obfConn, p.describe(), nil
 	}
 
@@ -543,10 +532,6 @@ func completeObfuscation(conn net.Conn, dc int, protoTag uint32) (*ObfuscatedCon
 	encrypted := make([]byte, obfuscatedFrameLen)
 	copy(encrypted, frame)
 	encStream.XORKeyStream(encrypted, encrypted)
-	// Restore bytes 0:56 to plaintext - only bytes 56:64 (proto_tag||dc||rnd) are
-	// sent encrypted. tg-ws-proxy keeps the SKIP region (0:8) as plaintext too;
-	// b4 was only restoring 8:56, leaving 0:7 as ciphertext on the wire. Some TG
-	// endpoints inspect the SKIP bytes before decryption.
 	copy(encrypted[0:56], frame[0:56])
 
 	if _, err := conn.Write(encrypted); err != nil {
@@ -560,24 +545,16 @@ func completeObfuscation(conn net.Conn, dc int, protoTag uint32) (*ObfuscatedCon
 	}, nil
 }
 
-// reservedFirst4Words are the first-4-byte little-endian values an obfuscated
-// frame must never start with: they collide with TLS/HTTP and the obfuscation
-// transport tags, so TG treats a connection beginning with one of them as a
-// different protocol. generateFrame avoids producing them; reservedFirst4
-// (transparent bridge) uses them to detect a non-obfuscated transport. Keep the
-// two in sync via this single list.
 var reservedFirst4Words = []uint32{
-	0x44414548, // "HEAD"
-	0x54534f50, // "POST"
-	0x20544547, // "GET "
-	0x4954504f, // "OPTI"
-	0x02010316, // TLS record header
-	0xdddddddd, // padded intermediate tag
-	0xeeeeeeee, // intermediate tag
+	0x44414548,
+	0x54534f50,
+	0x20544547,
+	0x4954504f,
+	0x02010316,
+	0xdddddddd,
+	0xeeeeeeee,
 }
 
-// isReservedFirst4 reports whether the first 4 bytes are a reserved value
-// (0xef abridged-tag first byte, or any reservedFirst4Words value).
 func isReservedFirst4(b []byte) bool {
 	if b[0] == 0xef {
 		return true
