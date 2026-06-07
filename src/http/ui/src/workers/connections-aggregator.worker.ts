@@ -19,8 +19,10 @@ let snapshotInterval = 500;
 const groups = new Map<string, ConnectionGroup>();
 const devices = new Map<string, DeviceSummary>();
 let ipToMac: Record<string, string> = {};
+const learnedIpToMac = new Map<string, string>();
 let totalPackets = 0;
 let unmatchedCount = 0;
+let latestTs = 0;
 let dirty = false;
 let snapshotTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -51,7 +53,7 @@ function parseLine(line: string): {
     flags,
   ] = tokens;
   const cleanTs = rawTs.replaceAll(" [INFO]", "").trim().split(".")[0];
-  const ts = Date.parse(cleanTs.replaceAll("/", "-")) || Date.now();
+  const ts = Date.parse(cleanTs.replaceAll("/", "-")) || latestTs;
   if (protocol !== "TCP" && protocol !== "UDP") return null;
   return {
     timestamp: ts,
@@ -113,17 +115,79 @@ function evictIfNeeded(): void {
   for (let i = 0; i < toRemove; i++) groups.delete(entries[i][0]);
 }
 
+function mergeSeries(
+  target: { buckets: number[]; packets: number; lastSeen: number },
+  source: { buckets: number[]; packets: number; lastSeen: number },
+  now: number,
+): void {
+  rotateBuckets(target, now);
+  rotateBuckets(source, now);
+  for (let i = 0; i < bucketCount; i++) target.buckets[i] += source.buckets[i];
+  target.packets += source.packets;
+  target.lastSeen = Math.max(target.lastSeen, source.lastSeen);
+}
+
+function reassignIpToMac(ip: string, mac: string, now: number): void {
+  const srcDev = devices.get(ip);
+  if (srcDev) {
+    const tgtDev = devices.get(mac);
+    if (tgtDev) {
+      mergeSeries(tgtDev, srcDev, now);
+    } else {
+      srcDev.mac = mac;
+      devices.set(mac, srcDev);
+    }
+    devices.delete(ip);
+  }
+
+  for (const [key, g] of Array.from(groups)) {
+    if (g.mac !== ip) continue;
+    const newKey = mac + key.slice(ip.length);
+    const tgt = groups.get(newKey);
+    if (tgt) {
+      mergeSeries(tgt, g, now);
+      if (g.firstSeen < tgt.firstSeen) tgt.firstSeen = g.firstSeen;
+      for (const dip of g.destIps)
+        if (!tgt.destIps.includes(dip)) tgt.destIps.push(dip);
+      if (!tgt.tls && g.tls) tgt.tls = g.tls;
+      if (!tgt.hostSet && g.hostSet) tgt.hostSet = g.hostSet;
+      if (!tgt.ipSet && g.ipSet) tgt.ipSet = g.ipSet;
+      if (!tgt.flags && g.flags) tgt.flags = g.flags;
+      groups.delete(key);
+    } else {
+      g.mac = mac;
+      g.key = newKey;
+      groups.delete(key);
+      groups.set(newKey, g);
+    }
+  }
+}
+
+function resolveSourceMac(
+  p: { sourceAlias: string; source: string },
+  now: number,
+): string {
+  const ip = stripPort(p.source);
+  const mac = p.sourceAlias ? normalizeMac(p.sourceAlias) : "";
+  if (mac) {
+    if (ip && learnedIpToMac.get(ip) !== mac) {
+      learnedIpToMac.set(ip, mac);
+      if (ip !== mac && devices.has(ip)) reassignIpToMac(ip, mac, now);
+    }
+    return mac;
+  }
+  return ipToMac[ip] || learnedIpToMac.get(ip) || ip;
+}
+
 function ingest(lines: string[]): void {
-  const now = Date.now();
   for (const line of lines) {
     const p = parseLine(line);
     if (!p) continue;
 
-    let mac = p.sourceAlias ? normalizeMac(p.sourceAlias) : "";
-    if (!mac) {
-      const ip = stripPort(p.source);
-      mac = ipToMac[ip] || ip;
-    }
+    if (p.timestamp > latestTs) latestTs = p.timestamp;
+    const now = latestTs;
+
+    const mac = resolveSourceMac(p, now);
     const groupIdent = p.domain || p.destination || "?";
     const key = `${mac}|${p.protocol}|${groupIdent}`;
 
@@ -196,7 +260,7 @@ function ingest(lines: string[]): void {
 }
 
 function buildSnapshot(): AggregatorSnapshot {
-  const now = Date.now();
+  const now = latestTs;
   const arrGroups: ConnectionGroup[] = [];
   for (const g of groups.values()) {
     rotateBuckets(g, now);
@@ -231,8 +295,10 @@ function startTimer(): void {
 function clearState(): void {
   groups.clear();
   devices.clear();
+  learnedIpToMac.clear();
   totalPackets = 0;
   unmatchedCount = 0;
+  latestTs = 0;
   dirty = true;
 }
 

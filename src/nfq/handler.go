@@ -13,6 +13,7 @@ import (
 
 	"github.com/daniellavrushin/b4/capture"
 	"github.com/daniellavrushin/b4/config"
+	"github.com/daniellavrushin/b4/discord"
 	"github.com/daniellavrushin/b4/log"
 	"github.com/daniellavrushin/b4/metrics"
 	"github.com/daniellavrushin/b4/quic"
@@ -444,6 +445,11 @@ func (w *Worker) handleTCPPacket(q *nfqueue.Nfqueue, id uint32, pkt *pktInfo, cf
 			}
 			if !cfg.Queue.IsDiscovery {
 				log.LogConnection("TCP", sniTarget, host, pkt.srcStr, sport, ipTarget, pkt.dstStr, dport, pkt.srcMac, config.TLSVersionString(tlsVersion), "block")
+				blockedTarget := host
+				if blockedTarget == "" {
+					blockedTarget = pkt.dstStr
+				}
+				metrics.GetMetricsCollector().RecordBlock(blockedTarget, pkt.srcMac)
 			}
 			if err := q.SetVerdict(id, nfqueue.NfDrop); err != nil {
 				log.Tracef("failed to set drop verdict on packet %d: %v", id, err)
@@ -586,7 +592,7 @@ func (w *Worker) handleUDPPacket(q *nfqueue.Nfqueue, id uint32, pkt *pktInfo, cf
 	matchedIP := st != nil
 	matchedQUIC := false
 	matchedLearned := false
-	isSTUN := false
+	isVoiceMedia := false
 	host := ""
 	ipTarget := ""
 	sniTarget := ""
@@ -627,7 +633,7 @@ func (w *Worker) handleUDPPacket(q *nfqueue.Nfqueue, id uint32, pkt *pktInfo, cf
 		}
 	}
 
-	isSTUN = stun.IsSTUNMessage(payload)
+	isVoiceMedia = stun.IsSTUNMessage(payload) || discord.IsVoicePacket(payload)
 
 	isQUIC := quic.LooksLikeQUIC(payload)
 
@@ -660,7 +666,7 @@ func (w *Worker) handleUDPPacket(q *nfqueue.Nfqueue, id uint32, pkt *pktInfo, cf
 		captureManager.CapturePayload(connKey, host, "quic", payload)
 	}
 
-	shouldHandle := (matchedIP || matchedQUIC || matchedPort) && !(isSTUN && set.UDP.FilterSTUN)
+	shouldHandle := (matchedIP || matchedQUIC || matchedPort) && !(isVoiceMedia && set.UDP.FilterSTUN)
 
 	matched = shouldHandle
 
@@ -690,7 +696,7 @@ func (w *Worker) handleUDPPacket(q *nfqueue.Nfqueue, id uint32, pkt *pktInfo, cf
 		log.LogConnection("UDP", sniTarget, host, pkt.srcStr, sport, ipTarget, pkt.dstStr, dport, pkt.srcMac, udpTLS, "")
 	}
 
-	if isSTUN && set != nil && set.UDP.FilterSTUN {
+	if isVoiceMedia && set != nil && set.UDP.FilterSTUN {
 		return accept(q, id)
 	}
 
@@ -725,6 +731,11 @@ func (w *Worker) handleUDPPacket(q *nfqueue.Nfqueue, id uint32, pkt *pktInfo, cf
 			}
 			if !cfg.Queue.IsDiscovery {
 				log.LogConnection("UDP", sniTarget, host, pkt.srcStr, sport, ipTarget, pkt.dstStr, dport, pkt.srcMac, udpTLS, "block")
+				blockedTarget := host
+				if blockedTarget == "" {
+					blockedTarget = pkt.dstStr
+				}
+				metrics.GetMetricsCollector().RecordBlock(blockedTarget, pkt.srcMac)
 			}
 			if err := q.SetVerdict(id, nfqueue.NfDrop); err != nil {
 				log.Tracef("failed to set drop verdict on packet %d: %v", id, err)

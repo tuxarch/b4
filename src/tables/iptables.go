@@ -19,11 +19,11 @@ type IPTablesManager struct {
 	cfg              *config.Config
 	useLegacy        bool
 	multiportSupport map[string]bool // per-binary cache (iptables vs ip6tables may differ)
-	connbytesSupport map[string]bool // per-binary cache
+	connbytesSupport map[string]error // per-binary cache
 }
 
 func NewIPTablesManager(cfg *config.Config, useLegacy bool) *IPTablesManager {
-	return &IPTablesManager{cfg: cfg, useLegacy: useLegacy, multiportSupport: make(map[string]bool), connbytesSupport: make(map[string]bool)}
+	return &IPTablesManager{cfg: cfg, useLegacy: useLegacy, multiportSupport: make(map[string]bool), connbytesSupport: make(map[string]error)}
 }
 
 func (im *IPTablesManager) iptablesBin() string {
@@ -41,22 +41,21 @@ func (im *IPTablesManager) ip6tablesBin() string {
 }
 
 func (im *IPTablesManager) checkConnbytesSupport(ipt string) error {
-	if result, ok := im.connbytesSupport[ipt]; ok {
-		if result {
-			return nil
-		}
-		return fmt.Errorf("xt_connbytes kernel module is not available for %s — install it with: modprobe xt_connbytes (or apt install xtables-addons-common / linux-modules-extra-$(uname -r))", ipt)
+	if err, ok := im.connbytesSupport[ipt]; ok {
+		return err
 	}
 
-	supported := im.probeModuleInTempChain(ipt, []string{"-p", "tcp", "-m", "connbytes", "--connbytes-dir", "original",
+	supported, probeErr := im.probeModuleInTempChain(ipt, []string{"-p", "tcp", "-m", "connbytes", "--connbytes-dir", "original",
 		"--connbytes-mode", "packets", "--connbytes", "0:10", "-j", "ACCEPT"})
-	im.connbytesSupport[ipt] = supported
 	if supported {
+		im.connbytesSupport[ipt] = nil
 		log.Tracef("IPTABLES[%s]: connbytes module is available", ipt)
 		return nil
 	}
 
-	return fmt.Errorf("xt_connbytes kernel module is not available for %s — install it with: modprobe xt_connbytes (or apt install xtables-addons-common / linux-modules-extra-$(uname -r))", ipt)
+	err := fmt.Errorf("xt_connbytes kernel module is not available for %s (%v) - install it with: modprobe xt_connbytes (or apt install xtables-addons-common / linux-modules-extra-$(uname -r))", ipt, probeErr)
+	im.connbytesSupport[ipt] = err
+	return err
 }
 
 // hasMultiportSupport checks if iptables multiport module is available
@@ -65,7 +64,7 @@ func (im *IPTablesManager) hasMultiportSupport(ipt string) bool {
 		return result
 	}
 
-	supported := im.probeModuleInTempChain(ipt, []string{"-p", "tcp", "-m", "multiport", "--dports", "80,443", "-j", "ACCEPT"})
+	supported, _ := im.probeModuleInTempChain(ipt, []string{"-p", "tcp", "-m", "multiport", "--dports", "80,443", "-j", "ACCEPT"})
 	im.multiportSupport[ipt] = supported
 	if supported {
 		log.Tracef("IPTABLES[%s]: multiport module is available", ipt)
@@ -77,19 +76,19 @@ func (im *IPTablesManager) hasMultiportSupport(ipt string) bool {
 
 // probeModuleInTempChain tests whether a rule spec is accepted by iptables
 // using a temporary chain, so the probe never touches live traffic.
-func (im *IPTablesManager) probeModuleInTempChain(ipt string, testSpec []string) bool {
+func (im *IPTablesManager) probeModuleInTempChain(ipt string, testSpec []string) (bool, error) {
 	const tmpChain = "B4_MODULE_TEST"
 	_, _ = run(ipt, "-w", "-t", "filter", "-F", tmpChain)
 	_, _ = run(ipt, "-w", "-t", "filter", "-X", tmpChain)
 	if _, err := run(ipt, "-w", "-t", "filter", "-N", tmpChain); err != nil {
-		return false
+		return false, fmt.Errorf("could not create probe chain %s: %w", tmpChain, err)
 	}
 	defer func() {
 		_, _ = run(ipt, "-w", "-t", "filter", "-F", tmpChain)
 		_, _ = run(ipt, "-w", "-t", "filter", "-X", tmpChain)
 	}()
 	_, err := run(append([]string{ipt, "-w", "-t", "filter", "-A", tmpChain}, testSpec...)...)
-	return err == nil
+	return err == nil, err
 }
 
 func (im *IPTablesManager) existsChain(ipt, table, chain string) bool {

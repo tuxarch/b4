@@ -12,6 +12,7 @@ import { MetricsCards } from "./MetricsCards";
 import { ActiveSets } from "./ActiveSets";
 import { DeviceActivity } from "./DeviceActivity";
 import { Escalations } from "./Escalations";
+import { Blackhole } from "./Blackhole";
 import { UnmatchedDomains } from "./UnmatchedDomains";
 import { SimpleLineChart } from "./SimpleLineChart";
 import { colors, fonts } from "@design";
@@ -28,6 +29,9 @@ export interface Metrics {
   udp_connections: number;
   targeted_connections: number;
   rst_dropped: number;
+  blocked_total: number;
+  blocked_domains: Record<string, number>;
+  blocked_devices: Record<string, number>;
   connection_rate: { timestamp: number; value: number }[];
   packet_rate: { timestamp: number; value: number }[];
   top_domains: Record<string, number>;
@@ -103,6 +107,9 @@ const normalizeMetrics = (data: null | Metrics): Metrics => {
       udp_connections: 0,
       targeted_connections: 0,
       rst_dropped: 0,
+      blocked_total: 0,
+      blocked_domains: {},
+      blocked_devices: {},
       connection_rate: [],
       packet_rate: [],
       top_domains: {},
@@ -143,6 +150,25 @@ const normalizeMetrics = (data: null | Metrics): Metrics => {
     udp_connections: safeNumber(data.udp_connections),
     targeted_connections: safeNumber(data.targeted_connections),
     rst_dropped: safeNumber(data.rst_dropped),
+    blocked_total: safeNumber(data.blocked_total),
+    blocked_domains:
+      data.blocked_domains && typeof data.blocked_domains === "object"
+        ? Object.fromEntries(
+            Object.entries(data.blocked_domains).map(([k, v]) => [
+              String(k),
+              safeNumber(v),
+            ]),
+          )
+        : {},
+    blocked_devices:
+      data.blocked_devices && typeof data.blocked_devices === "object"
+        ? Object.fromEntries(
+            Object.entries(data.blocked_devices).map(([k, v]) => [
+              String(k),
+              safeNumber(v),
+            ]),
+          )
+        : {},
     connection_rate: Array.isArray(data.connection_rate)
       ? data.connection_rate.map(
           (item: { timestamp: number; value: number }) => ({
@@ -402,6 +428,16 @@ export function DashboardPage() {
           <Escalations
             escalations={metrics.escalations}
             total={metrics.total_escalations}
+          />
+        </Box>
+      )}
+
+      {metrics.blocked_total > 0 && (
+        <Box sx={{ mb: 1.5 }}>
+          <Blackhole
+            total={metrics.blocked_total}
+            blockedDomains={metrics.blocked_domains}
+            blockedDevices={metrics.blocked_devices}
           />
         </Box>
       )}
