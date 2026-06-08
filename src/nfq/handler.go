@@ -236,7 +236,9 @@ func (w *Worker) handleTCPPacket(q *nfqueue.Nfqueue, id uint32, pkt *pktInfo, cf
 		}
 	}
 
-	if matched && cfg.IsTCPPort(dport) && set.TCP.Duplicate.Enabled && set.TCP.Duplicate.Count > 0 {
+	routeTProxy := matched && set != nil && set.Routing.Enabled && config.RoutingUsesTProxy(set.Routing.Mode)
+
+	if matched && !routeTProxy && cfg.IsTCPPort(dport) && set.TCP.Duplicate.Enabled && set.TCP.Duplicate.Count > 0 {
 		log.Tracef("TCP duplicate to %s:%d (%d copies, set: %s)", pkt.dstStr, dport, set.TCP.Duplicate.Count, set.Name)
 
 		dupConnKey := fmt.Sprintf(connKeyFormat, pkt.srcStr, sport, pkt.dstStr, dport)
@@ -270,10 +272,26 @@ func (w *Worker) handleTCPPacket(q *nfqueue.Nfqueue, id uint32, pkt *pktInfo, cf
 	isAck := (tcpFlags & 0x10) != 0
 	isRst := (tcpFlags & 0x04) != 0
 	if isRst && cfg.IsTCPPort(dport) {
-		log.Tracef("RST received from %s:%d", pkt.dstStr, dport)
+		log.Tracef("RST to %s:%d", pkt.dstStr, dport)
+		if matched && set != nil && set.TCP.RSTProtection.Enabled {
+			connKey := fmt.Sprintf(connKeyFormat, pkt.srcStr, sport, pkt.dstStr, dport)
+			if w.connTracker.ShouldDropOutboundRST(connKey) {
+				log.Warnf("RST protection: dropped outbound RST to %s:%d — connection not established", pkt.dstStr, dport)
+				metrics.GetMetricsCollector().RecordRSTDrop()
+				if err := q.SetVerdict(id, nfqueue.NfDrop); err != nil {
+					log.Tracef("failed to drop outbound RST packet %d: %v", id, err)
+				}
+				return 0
+			}
+		}
 	}
 
-	if isSyn && !isAck && cfg.IsTCPPort(dport) && matched && !set.TCP.Duplicate.Enabled && needsTCPSynInjection(set) {
+	if isAck && !isSyn && !isRst && cfg.IsTCPPort(dport) && matched && set != nil && set.TCP.RSTProtection.Enabled {
+		connKey := fmt.Sprintf(connKeyFormat, pkt.srcStr, sport, pkt.dstStr, dport)
+		w.connTracker.MarkEstablished(connKey)
+	}
+
+	if isSyn && !isAck && !routeTProxy && cfg.IsTCPPort(dport) && matched && !set.TCP.Duplicate.Enabled && needsTCPSynInjection(set) {
 		log.Tracef("TCP SYN to %s:%d (set: %s)", pkt.dstStr, dport, set.Name)
 
 		m := metrics.GetMetricsCollector()
@@ -295,6 +313,11 @@ func (w *Worker) handleTCPPacket(q *nfqueue.Nfqueue, id uint32, pkt *pktInfo, cf
 				w.sendFakeSynWithMD5V6(set, pkt.raw, pkt.dst)
 			}
 			_ = w.sock.SendIPv6(pkt.raw, pkt.dst)
+		}
+
+		if set.TCP.Incoming.Mode != config.ConfigOff || set.TCP.RSTProtection.Enabled || set.Escalate.To != "" {
+			connKey := fmt.Sprintf(connKeyFormat, pkt.srcStr, sport, pkt.dstStr, dport)
+			w.connTracker.RegisterOutgoing(connKey, set)
 		}
 
 		if err := q.SetVerdict(id, nfqueue.NfDrop); err != nil {
@@ -336,7 +359,7 @@ func (w *Worker) handleTCPPacket(q *nfqueue.Nfqueue, id uint32, pkt *pktInfo, cf
 		}
 
 		if host != "" {
-			if mSNI, stSNI := matcher.MatchSNIWithSourceTLS(host, pkt.srcMac, tlsVersion); mSNI {
+			if mSNI, stSNI := matcher.MatchSNIWithSourceTLS(host, pkt.srcMac, tlsVersion, pkt.ver); mSNI {
 				// If SNI-matched set has a port filter, verify port matches (AND logic)
 				if stSNI.MatchesTCPDPort(dport) {
 					matchedSNI = true
@@ -466,7 +489,7 @@ func (w *Worker) handleTCPPacket(q *nfqueue.Nfqueue, id uint32, pkt *pktInfo, cf
 	if matched {
 		ibdOn := set.TCP.IPBlockDetect.Enabled
 		canEscalate := set.Escalate.To != ""
-		if isClientHello && (ibdOn || canEscalate) && host != "" && cfg.IsTCPPort(dport) {
+		if isClientHello && !routeTProxy && (ibdOn || canEscalate) && host != "" && cfg.IsTCPPort(dport) {
 			ibd := &set.TCP.IPBlockDetect
 			dstIPPort := fmt.Sprintf("%s:%d", pkt.dstStr, dport)
 			ibConnKey := fmt.Sprintf(connKeyFormat, pkt.srcStr, sport, pkt.dstStr, dport)
@@ -529,7 +552,7 @@ func (w *Worker) handleTCPPacket(q *nfqueue.Nfqueue, id uint32, pkt *pktInfo, cf
 			w.connTracker.RegisterOutgoing(connKey, set)
 		}
 
-		if !needsTCPInjection(set) {
+		if routeTProxy || !needsTCPInjection(set) {
 			return accept(q, id)
 		}
 
@@ -644,7 +667,7 @@ func (w *Worker) handleUDPPacket(q *nfqueue.Nfqueue, id uint32, pkt *pktInfo, cf
 	}
 
 	if host != "" {
-		if mSNI, sniSet := matcher.MatchSNIWithSourceTLS(host, pkt.srcMac, 0x0304); mSNI { // QUIC is always TLS 1.3
+		if mSNI, sniSet := matcher.MatchSNIWithSourceTLS(host, pkt.srcMac, 0x0304, pkt.ver); mSNI { // QUIC is always TLS 1.3
 			// If SNI-matched set has a port filter, verify port matches (AND logic)
 			if sniSet.MatchesUDPDPort(dport) {
 				matchedQUIC = true

@@ -101,6 +101,7 @@ export interface TargetsConfig {
   geoip_categories: string[];
   source_devices?: string[];
   tls?: string;
+  ip_version?: string;
 }
 
 export interface DomainStatisticsConfig {
@@ -379,6 +380,7 @@ export interface DisorderFragConfig {
 export interface DNSConfig {
   enabled: boolean;
   target_dns: string;
+  doh_url: string;
   fragment_query: boolean;
 }
 

@@ -97,7 +97,10 @@ func applyGroup(cfg *config.Config, group []domainWithSet) {
 		if !set.Enabled {
 			continue
 		}
-		if setContainsAnyDomain(set, groupDomains) {
+		if set.Routing.Enabled {
+			continue
+		}
+		if setListsAnyDomain(set, groupDomains) {
 			existingSet = set
 			break
 		}
@@ -136,13 +139,44 @@ func applyGroup(cfg *config.Config, group []domainWithSet) {
 	}
 }
 
+func normalizeDomain(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
+}
+
+func setListsAnyDomain(set *config.SetConfig, domains []string) bool {
+	for _, rawSNI := range set.Targets.SNIDomains {
+		sni := normalizeDomain(rawSNI)
+		if sni == "" {
+			continue
+		}
+		for _, rawDomain := range domains {
+			domain := normalizeDomain(rawDomain)
+			if domain == "" {
+				continue
+			}
+			if sni == domain || (len(domain) > len(sni) && strings.HasSuffix(domain, "."+sni)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func setContainsAnyDomain(set *config.SetConfig, domains []string) bool {
 	matchList := set.Targets.DomainsToMatch
 	if len(matchList) == 0 {
 		matchList = set.Targets.SNIDomains
 	}
-	for _, target := range matchList {
-		for _, domain := range domains {
+	for _, rawTarget := range matchList {
+		target := normalizeDomain(rawTarget)
+		if target == "" {
+			continue
+		}
+		for _, rawDomain := range domains {
+			domain := normalizeDomain(rawDomain)
+			if domain == "" {
+				continue
+			}
 			if target == domain || domainMatchesSuffix(domain, target) {
 				return true
 			}
@@ -162,8 +196,9 @@ func domainMatchesSuffix(domain, target string) bool {
 }
 
 func domainInSNIList(sniList []string, domain string) bool {
+	target := normalizeDomain(domain)
 	for _, sni := range sniList {
-		if sni == domain {
+		if normalizeDomain(sni) == target {
 			return true
 		}
 	}
