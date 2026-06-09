@@ -194,7 +194,9 @@ SFTP_PORT ?= 22
 
 .PHONY: deploy-%
 deploy-%:
+
 	@$(eval ARCH := $(subst deploy-,,$@))
+
 	@if [ ! -f .env ]; then \
 		echo "Error: .env file not found. Create one from .env.example"; \
 		exit 1; \
@@ -203,6 +205,10 @@ deploy-%:
 		echo "Error: SFTP_HOST, SFTP_USER and SFTP_PATH must be set in .env"; \
 		exit 1; \
 	fi
+
+	@$(MAKE) --no-print-directory build-ui
+	@$(MAKE) --no-print-directory $(ARCH)
+
 	@$(MAKE) --no-print-directory linux-$(ARCH)
 	@echo "Uploading to $(SFTP_USER)@$(SFTP_HOST):$(SFTP_PATH)/$(BINARY_NAME)..."
 	@if [ -n "$(SFTP_PASS)" ]; then \

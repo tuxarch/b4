@@ -6,7 +6,6 @@ import (
 )
 
 func ParseQueryDomain(payload []byte) (string, bool) {
-	// DNS header is 12 bytes
 	if len(payload) < 12 {
 		return "", false
 	}
@@ -42,11 +41,6 @@ func ParseTransactionID(payload []byte) (uint16, bool) {
 	return binary.BigEndian.Uint16(payload[:2]), true
 }
 
-// BuildBlockResponse builds an NXDOMAIN DNS response for the given query,
-// echoing the original question. This sinkholes the domain: the client gets
-// "no such host" and never obtains an IP, which blocks the domain regardless
-// of TLS SNI (defeating HTTP/2 connection coalescing and Encrypted ClientHello).
-// Returns nil if the query is too short or malformed to parse.
 func BuildBlockResponse(query []byte) []byte {
 	if len(query) < 12 {
 		return nil
@@ -60,16 +54,24 @@ func BuildBlockResponse(query []byte) []byte {
 	resp := make([]byte, questionEnd)
 	copy(resp, query[:questionEnd])
 
-	// Flags: QR=1, keep Opcode+RD, clear AA/TC, RA=1, RCODE=3 (NXDOMAIN).
 	resp[2] = 0x80 | (query[2] & 0x79)
 	resp[3] = 0x83
 
-	// QDCOUNT=1, ANCOUNT=0, NSCOUNT=0, ARCOUNT=0.
 	binary.BigEndian.PutUint16(resp[4:6], 1)
 	binary.BigEndian.PutUint16(resp[6:8], 0)
 	binary.BigEndian.PutUint16(resp[8:10], 0)
 	binary.BigEndian.PutUint16(resp[10:12], 0)
 
+	return resp
+}
+
+func BuildServfailResponse(query []byte) []byte {
+	resp := BuildBlockResponse(query)
+	if resp == nil {
+		return nil
+	}
+	// Set only the RCODE nibble to SERVFAIL (2); preserve the upper flag bits.
+	resp[3] = (resp[3] & 0xF0) | 0x02
 	return resp
 }
 

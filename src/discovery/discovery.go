@@ -128,7 +128,9 @@ func NewDiscoverySuite(inputs []string, pool *nfq.Pool, skipDNS bool, skipCache 
 	domainInputs := parseDiscoveryInputs(inputs)
 	if len(domainInputs) == 0 {
 		suite := NewCheckSuite(domainInputs)
-		return &DiscoverySuite{CheckSuite: suite}
+		ds := &DiscoverySuite{CheckSuite: suite}
+		ds.initCancelContext()
+		return ds
 	}
 	suite := NewCheckSuite(domainInputs)
 
@@ -176,6 +178,7 @@ func NewDiscoverySuite(inputs []string, pool *nfq.Pool, skipDNS bool, skipCache 
 		}
 	}
 
+	ds.initCancelContext()
 	return ds
 }
 
@@ -211,6 +214,7 @@ func parseDiscoveryInputs(inputs []string) []DomainInput {
 }
 
 func (ds *DiscoverySuite) RunDiscovery() {
+	defer ds.ctxCancel()
 	log.DiscoveryLogf("═══════════════════════════════════════")
 	domainNames := make([]string, len(ds.Domains))
 	for i, di := range ds.Domains {
@@ -656,6 +660,30 @@ func (ds *DiscoverySuite) optimizeFakeSNI() ConfigPreset {
 	return basePreset
 }
 
+func (ds *DiscoverySuite) canceled() bool {
+	select {
+	case <-ds.cancel:
+		return true
+	default:
+		return false
+	}
+}
+
+func (ds *DiscoverySuite) initCancelContext() {
+	ds.ctx, ds.ctxCancel = context.WithCancel(context.Background())
+	go func() {
+		select {
+		case <-ds.cancel:
+			ds.ctxCancel()
+		case <-ds.ctx.Done():
+		}
+	}()
+}
+
+func (ds *DiscoverySuite) fetchContext(timeout time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ds.ctx, timeout)
+}
+
 func (ds *DiscoverySuite) optimizeCombo() ConfigPreset {
 	log.DiscoveryLogf("  Optimizing Combo with TTL scan + strategy rotation")
 
@@ -718,6 +746,9 @@ func (ds *DiscoverySuite) optimizeComboStrategy(basePreset ConfigPreset, optimal
 	bestSpeed := initialSpeed
 
 	for _, strat := range strategies {
+		if ds.canceled() {
+			return bestStrategy, bestSpeed
+		}
 		if strat == "ttl" {
 			continue // Already tested during TTL search
 		}
@@ -750,6 +781,9 @@ func (ds *DiscoverySuite) optimizeComboShuffleDelay(basePreset ConfigPreset, opt
 
 	for _, mode := range shuffleModes {
 		for _, d := range delays {
+			if ds.canceled() {
+				return bestShuffle, bestDelay, bestSpeed
+			}
 			if mode == bestShuffle && d == bestDelay {
 				continue
 			}
@@ -1220,7 +1254,7 @@ func (ds *DiscoverySuite) fetchUsingIPForDomain(di DomainInput, timeout time.Dur
 		Timestamp: time.Now(),
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := ds.fetchContext(timeout)
 	defer cancel()
 
 	transport := &http.Transport{
@@ -2047,6 +2081,9 @@ func (ds *DiscoverySuite) findOptimalPosition(basePreset ConfigPreset, maxPos in
 	log.DiscoveryLogf("Binary search for optimal position (range %d-%d)", low, high)
 
 	for low < high {
+		if ds.canceled() {
+			break
+		}
 		mid := (low + high) / 2
 
 		preset := basePreset
@@ -2135,7 +2172,7 @@ func (ds *DiscoverySuite) measureNetworkBaseline() float64 {
 	log.DiscoveryLogf("Measuring network baseline using %s", referenceDomain)
 
 	testURL := fmt.Sprintf("https://%s/", referenceDomain)
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := ds.fetchContext(timeout)
 	defer cancel()
 
 	client := &http.Client{
