@@ -6,27 +6,19 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/daniellavrushin/b4/config"
 	"github.com/daniellavrushin/b4/log"
+	"github.com/daniellavrushin/b4/netprobe"
 	"github.com/daniellavrushin/b4/nfq"
 )
 
 //go:embed dns.json
 var cdnJSON []byte
-
-type dohResponse struct {
-	Answer []struct {
-		Data string `json:"data"`
-		Type int    `json:"type"`
-	} `json:"Answer"`
-}
 
 type CDNEntry struct {
 	Match   []string `json:"match"`
@@ -97,26 +89,34 @@ func (ds *DiscoverySuite) runDNSDiscoveryForDomain(domain string) *DNSDiscoveryR
 	return prober.Probe(ctx)
 }
 
-// applyBestDNSConfig applies the best DNS bypass config found across all domains.
 func (ds *DiscoverySuite) applyBestDNSConfig() {
-	var bestServer string
+	var bestDoH, bestServer string
 	needsFragment := false
 
 	for _, dnsResult := range ds.dnsResults {
 		if dnsResult == nil || !dnsResult.IsPoisoned {
 			continue
 		}
-		if dnsResult.BestServer != "" {
+		if bestDoH == "" && dnsResult.BestDoHURL != "" {
+			bestDoH = dnsResult.BestDoHURL
+		}
+		if bestServer == "" && dnsResult.BestServer != "" {
 			bestServer = dnsResult.BestServer
 			needsFragment = dnsResult.NeedsFragment
-			break
 		}
 		if dnsResult.NeedsFragment {
 			needsFragment = true
 		}
 	}
 
-	if bestServer != "" || needsFragment {
+	switch {
+	case bestDoH != "":
+		ds.discoveredDNS = config.DNSConfig{
+			Enabled: true,
+			DoHURL:  bestDoH,
+		}
+		log.DiscoveryLogf("  Applied DNS bypass: DoH=%s", bestDoH)
+	case bestServer != "" || needsFragment:
 		ds.discoveredDNS = config.DNSConfig{
 			Enabled:       true,
 			TargetDNS:     bestServer,
@@ -130,7 +130,7 @@ func (r *DNSDiscoveryResult) hasWorkingConfig() bool {
 	if r == nil {
 		return true
 	}
-	return !r.IsPoisoned || r.BestServer != "" || r.NeedsFragment
+	return !r.IsPoisoned || r.BestDoHURL != "" || r.BestServer != "" || r.NeedsFragment
 }
 
 func NewDNSProber(domain string, timeout time.Duration, pool *nfq.Pool, cfg *config.Config, flowMark uint, ipVersion string) *DNSProber {
@@ -144,8 +144,6 @@ func NewDNSProber(domain string, timeout time.Duration, pool *nfq.Pool, cfg *con
 	}
 }
 
-// ipNetwork returns the resolver network ("ip4"/"ip6") for this probe run.
-// An explicit per-run ipVersion wins; "auto" preserves the queue-config default.
 func (p *DNSProber) ipNetwork() string {
 	switch p.ipVersion {
 	case "ipv4":
@@ -159,7 +157,6 @@ func (p *DNSProber) ipNetwork() string {
 	return "ip4"
 }
 
-// dnsRecordType returns the DoH record type ("A"/"AAAA") matching ipNetwork.
 func (p *DNSProber) dnsRecordType() string {
 	if p.ipNetwork() == "ip6" {
 		return "AAAA"
@@ -172,7 +169,6 @@ func (p *DNSProber) Probe(ctx context.Context) *DNSDiscoveryResult {
 		ProbeResults: []DNSProbeResult{},
 	}
 
-	// Run system resolver and DoH in parallel.
 	var expectedIPs, systemIPs []string
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -210,8 +206,8 @@ func (p *DNSProber) Probe(ctx context.Context) *DNSDiscoveryResult {
 	}
 	log.DiscoveryLogf("  DNS: system IPs %v, reference IPs (DoH): %v", systemIPs, expectedIPs)
 
-	if p.findValidIP(ctx, expectedIPs) == "" {
-		log.DiscoveryLogf("  DNS: neither system nor reference IPs serve %s (transport issue or site down)", p.domain)
+	if !p.anyIPConnectable(ctx, expectedIPs) {
+		log.DiscoveryLogf("  DNS: reference IPs for %s are unreachable at TCP level (transport issue or site down)", p.domain)
 		result.TransportBlocked = true
 		result.ExpectedIPs = uniqueIPs(expectedIPs, systemIPs)
 		return result
@@ -237,23 +233,17 @@ func (p *DNSProber) Probe(ctx context.Context) *DNSDiscoveryResult {
 	}
 	result.ProbeResults = append(result.ProbeResults, sysResult)
 
-	// Step 6: Try DNS bypass strategies.
 	p.findDNSBypass(ctx, result, expectedIPs[0])
 	return result
 }
 
-// findDNSBypass tries fragmentation and alternative DNS servers to bypass poisoning.
 func (p *DNSProber) findDNSBypass(ctx context.Context, result *DNSDiscoveryResult, expectedIP string) {
-	// Try fragmented query on system resolver first.
-	fragResult := p.testDNSWithFragment(ctx, "", expectedIP)
-	result.ProbeResults = append(result.ProbeResults, fragResult)
-	if fragResult.Works {
-		result.NeedsFragment = true
-		log.DiscoveryLogf("  DNS: fragmented query bypass works for %s", p.domain)
+	if url := p.findDoHBypass(ctx, result, expectedIP); url != "" {
+		result.BestDoHURL = url
+		log.DiscoveryLogf("  DNS: DoH bypass works for %s via %s", p.domain, url)
 		return
 	}
 
-	// Try alternative DNS servers (plain and fragmented).
 	for _, server := range p.cfg.System.Checker.ReferenceDNS {
 		plainResult := p.testDNS(ctx, server, false, expectedIP)
 		result.ProbeResults = append(result.ProbeResults, plainResult)
@@ -276,8 +266,27 @@ func (p *DNSProber) findDNSBypass(ctx context.Context, result *DNSDiscoveryResul
 	log.DiscoveryLogf("  DNS: no working DNS config found for %s", p.domain)
 }
 
-// sameSubnet checks if any system IP shares a /24 (IPv4) or /48 (IPv6) subnet
-// with any reference IP. Same-subnet IPs are CDN edge variance, not DNS poisoning.
+func (p *DNSProber) findDoHBypass(ctx context.Context, result *DNSDiscoveryResult, expectedIP string) string {
+	r := &netprobe.Resolver{Mark: int(p.flowMark), Timeout: p.timeout}
+	recordType := p.dnsRecordType()
+
+	for _, url := range netprobe.WireDoHServers {
+		probe := DNSProbeResult{Server: url, ExpectedIP: expectedIP}
+
+		ips, err := r.ResolveDoHOnce(ctx, netprobe.DoHServer{URL: url, Format: netprobe.DoHWire}, p.domain, recordType)
+		if err == nil && len(ips) > 0 {
+			probe.ResolvedIP = ips[0]
+			probe.Works = true
+			result.ProbeResults = append(result.ProbeResults, probe)
+			return url
+		}
+
+		result.ProbeResults = append(result.ProbeResults, probe)
+	}
+
+	return ""
+}
+
 func sameSubnet(systemIPs, referenceIPs []string) bool {
 	refSubnets := make(map[string]bool)
 	for _, ipStr := range referenceIPs {
@@ -310,7 +319,6 @@ func sameSubnet(systemIPs, referenceIPs []string) bool {
 	return false
 }
 
-// uniqueIPs merges two IP lists, deduplicating entries.
 func uniqueIPs(primary, secondary []string) []string {
 	seen := make(map[string]bool, len(primary))
 	result := make([]string, 0, len(primary)+len(secondary))
@@ -332,7 +340,7 @@ func uniqueIPs(primary, secondary []string) []string {
 func (p *DNSProber) getSystemResolverIPs(ctx context.Context) []string {
 	network := p.ipNetwork()
 
-	resolver := markedResolver(p.flowMark, p.timeout/2, "")
+	resolver := netprobe.MarkedResolver(int(p.flowMark), p.timeout/2, "")
 	ips, err := resolver.LookupIP(ctx, network, p.domain)
 	if err != nil {
 		log.DiscoveryLogf("  DNS: system resolver error: %v", err)
@@ -358,80 +366,14 @@ func (p *DNSProber) getSystemResolverIPs(ctx context.Context) []string {
 }
 
 func (p *DNSProber) getExpectedIPs(ctx context.Context) []string {
-	recordType := p.dnsRecordType()
-
-	dohServers := []string{
-		"https://dns.google/resolve?name=%s&type=" + recordType,
-		"https://dns.quad9.net:5053/dns-query?name=%s&type=" + recordType,
-		"https://cloudflare-dns.com/dns-query?name=%s&type=" + recordType,
-	}
-
-	client := &http.Client{
+	r := &netprobe.Resolver{
+		Mark:    int(p.flowMark),
 		Timeout: p.timeout,
-		Transport: &http.Transport{
-			DialContext: markedDialer(p.flowMark, p.timeout/2, p.timeout).DialContext,
-		},
+		UDP:     append(append([]string{}, netprobe.DefaultUDPServers...), p.cfg.System.Checker.ReferenceDNS...),
 	}
 
-	seenIPs := make(map[string]bool)
-	var allIPs []string
-
-	for _, endpoint := range dohServers {
-		url := fmt.Sprintf(endpoint, p.domain)
-
-		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-		if err != nil {
-			continue
-		}
-		req.Header.Set("Accept", "application/dns-json")
-
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Tracef("DoH %s failed: %v", endpoint, err)
-			continue
-		}
-
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-
-		var doh dohResponse
-		if err := json.Unmarshal(body, &doh); err != nil {
-			continue
-		}
-
-		wantType := 1
-		if recordType == "AAAA" {
-			wantType = 28
-		}
-
-		unvalidatedIPs := []string{}
-		for _, ans := range doh.Answer {
-			if ans.Type == wantType {
-				ip := ans.Data
-				if seenIPs[ip] {
-					continue
-				}
-				seenIPs[ip] = true
-				unvalidatedIPs = append(unvalidatedIPs, ip)
-
-				if p.testIPServesDomain(ctx, ip) {
-					log.Tracef("DoH: verified %s for %s", ip, p.domain)
-					allIPs = append(allIPs, ip)
-				}
-			}
-		}
-
-		if len(allIPs) == 0 && len(unvalidatedIPs) > 0 {
-			log.Tracef("DoH: TLS validation failed, trusting unvalidated IPs: %v", unvalidatedIPs)
-			allIPs = unvalidatedIPs
-		}
-
-		if len(allIPs) > 0 {
-			break
-		}
-	}
-
-	if len(allIPs) == 0 {
+	out, err := r.ResolveResilient(ctx, p.domain, p.dnsRecordType())
+	if err != nil || len(out.IPs) == 0 {
 		ip := p.getExpectedIPFallback(ctx)
 		if ip != "" {
 			return []string{ip}
@@ -439,14 +381,26 @@ func (p *DNSProber) getExpectedIPs(ctx context.Context) []string {
 		return nil
 	}
 
-	return allIPs
+	var validated []string
+	for _, ip := range out.IPs {
+		if p.testIPServesDomain(ctx, ip) {
+			log.Tracef("DoH: verified %s for %s", ip, p.domain)
+			validated = append(validated, ip)
+		}
+	}
+	if len(validated) > 0 {
+		return validated
+	}
+
+	log.Tracef("DoH: TLS validation failed for %s, trusting resolved IPs: %v", p.domain, out.IPs)
+	return out.IPs
 }
 
 func (p *DNSProber) getExpectedIPFallback(ctx context.Context) string {
 	network := p.ipNetwork()
 
 	for _, server := range p.cfg.System.Checker.ReferenceDNS {
-		resolver := markedResolver(p.flowMark, p.timeout/3, server)
+		resolver := netprobe.MarkedResolver(int(p.flowMark), p.timeout/3, server)
 
 		ips, err := resolver.LookupIP(ctx, network, p.domain)
 		if err == nil && len(ips) > 0 {
@@ -467,9 +421,9 @@ func (p *DNSProber) testDNS(ctx context.Context, server string, fragmented bool,
 		ExpectedIP: expectedIP,
 	}
 
-	resolver := markedResolver(p.flowMark, p.timeout, "")
+	resolver := netprobe.MarkedResolver(int(p.flowMark), p.timeout, "")
 	if server != "" {
-		resolver = markedResolver(p.flowMark, p.timeout, server)
+		resolver = netprobe.MarkedResolver(int(p.flowMark), p.timeout, server)
 	}
 
 	network := p.ipNetwork()
@@ -495,8 +449,6 @@ func (p *DNSProber) testDNS(ctx context.Context, server string, fragmented bool,
 	return result
 }
 
-// findValidIP returns the first IP from the list that serves the domain (TLS handshake),
-// or empty string if none work.
 func (p *DNSProber) findValidIP(ctx context.Context, ips []string) string {
 	valCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -508,8 +460,22 @@ func (p *DNSProber) findValidIP(ctx context.Context, ips []string) string {
 	return ""
 }
 
+func (p *DNSProber) anyIPConnectable(ctx context.Context, ips []string) bool {
+	connCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	dialer := netprobe.Dialer(int(p.flowMark), p.timeout/2, p.timeout)
+	for _, ip := range ips {
+		conn, err := dialer.DialContext(connCtx, "tcp", net.JoinHostPort(ip, "443"))
+		if err == nil {
+			conn.Close()
+			return true
+		}
+	}
+	return false
+}
+
 func (p *DNSProber) testIPServesDomain(ctx context.Context, ip string) bool {
-	dialer := markedDialer(p.flowMark, p.timeout/2, p.timeout)
+	dialer := netprobe.Dialer(int(p.flowMark), p.timeout/2, p.timeout)
 	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(ip, "443"))
 	if err != nil {
 		return false
@@ -536,22 +502,19 @@ func (p *DNSProber) testDNSWithFragment(ctx context.Context, server string, expe
 		ExpectedIP: expectedIP,
 	}
 
-	// Apply DNS config to pool temporarily
 	testCfg := p.buildDNSTestConfig(server, true)
 	if err := p.pool.UpdateConfig(testCfg); err != nil {
 		return result
 	}
-	defer p.pool.UpdateConfig(p.cfg) // Restore
+	defer p.pool.UpdateConfig(p.cfg)
 
 	time.Sleep(time.Duration(p.cfg.System.Checker.ConfigPropagateMs) * time.Millisecond)
 
-	// Use a timeout so we don't hang if fragmented DNS gets no response
 	lookupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	// Now DNS queries should be fragmented via NFQ
 	start := time.Now()
-	resolver := markedResolver(p.flowMark, p.timeout/2, "")
+	resolver := netprobe.MarkedResolver(int(p.flowMark), p.timeout/2, "")
 	ips, err := resolver.LookupIPAddr(lookupCtx, p.domain)
 	result.Latency = time.Since(start)
 

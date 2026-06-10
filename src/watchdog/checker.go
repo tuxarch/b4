@@ -11,8 +11,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/daniellavrushin/b4/discovery"
 	"github.com/daniellavrushin/b4/log"
+	"github.com/daniellavrushin/b4/netprobe"
 	"golang.org/x/sys/unix"
 )
 
@@ -45,7 +45,7 @@ func checkDomain(input string, mark uint, timeout time.Duration) CheckResult {
 		},
 		ResponseHeaderTimeout: timeout,
 		IdleConnTimeout:       timeout,
-		DialContext:            dialer.DialContext,
+		DialContext:           dialer.DialContext,
 	}
 
 	client := &http.Client{
@@ -53,11 +53,8 @@ func checkDomain(input string, mark uint, timeout time.Duration) CheckResult {
 		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) > 0 {
-				locLower := strings.ToLower(req.URL.String())
-				for _, marker := range discovery.BlockPageRedirectMarkers {
-					if strings.Contains(locLower, marker) {
-						return fmt.Errorf("ISP block page (redirect to %s)", req.URL.String())
-					}
+				if netprobe.IsBlockPageRedirect(req.URL.String()) {
+					return fmt.Errorf("ISP block page (redirect to %s)", req.URL.String())
 				}
 			}
 			if len(via) >= 3 {
@@ -76,7 +73,8 @@ func checkDomain(input string, mark uint, timeout time.Duration) CheckResult {
 	start := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
-		return CheckResult{Error: discovery.HumanizeError(err.Error())}
+		_, detail := netprobe.ClassifyTLSError(err)
+		return CheckResult{Error: detail}
 	}
 	defer resp.Body.Close()
 
@@ -121,7 +119,7 @@ evaluate:
 		speed = float64(bytesRead) / duration.Seconds()
 	}
 
-	if blockErr := discovery.DetectBlockPage(headBuf); blockErr != "" {
+	if blockErr := netprobe.DetectBlockPageBody(headBuf); blockErr != "" {
 		return CheckResult{Error: blockErr}
 	}
 

@@ -368,8 +368,9 @@ func RoutingClearAll() {
 			}
 		}
 	} else {
-		for _, st := range routeRuleCache {
+		for id, st := range routeRuleCache {
 			routeCleanupAny(be, st)
+			delete(routeRuleCache, id)
 		}
 		be.clearAll()
 	}
