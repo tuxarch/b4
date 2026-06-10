@@ -579,6 +579,9 @@ func initLogging(cfg *config.Config) error {
 
 	fmt.Fprintf(os.Stderr, "[INIT] Logging initialized at level %d\n", cfg.System.Logging.Level)
 
+	w := io.MultiWriter(log.OrigStderr(), b4http.LogWriter())
+	log.Init(w, log.Level(cfg.System.Logging.Level), cfg.System.Logging.Instaflush)
+
 	if cfg.System.Logging.Syslog {
 		if err := log.EnableSyslog("b4"); err != nil {
 			log.Warnf("Syslog unavailable, continuing without it: %v", err)
@@ -588,16 +591,13 @@ func initLogging(cfg *config.Config) error {
 		}
 	}
 
-	if cfg.System.Logging.ErrorFile != "" {
-		if err := log.InitErrorFile(cfg.System.Logging.ErrorFile); err != nil {
+	if errFilePath := cfg.System.Logging.ErrorFilePath(); errFilePath != "" {
+		if err := log.InitErrorFile(errFilePath); err != nil {
 			log.Errorf("Failed to open error log file: %v", err)
 		} else {
-			log.Infof("Error logging to file: %s", cfg.System.Logging.ErrorFile)
+			log.Infof("Error logging to file: %s", errFilePath)
 		}
 	}
-
-	w := io.MultiWriter(log.OrigStderr(), b4http.LogWriter())
-	log.Init(w, log.Level(cfg.System.Logging.Level), cfg.System.Logging.Instaflush)
 
 	currentLogLevel = log.Level(cfg.System.Logging.Level)
 	return nil

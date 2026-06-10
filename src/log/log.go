@@ -25,11 +25,14 @@ const (
 )
 
 var (
-	CurLevel   atomic.Int32
-	errFile    *os.File
-	errLogger  *log.Logger
-	errMu      sync.Mutex
-	origStderr int
+	CurLevel         atomic.Int32
+	errFile          *os.File
+	errLogger        *log.Logger
+	errMu            sync.Mutex
+	origStderr       int
+	origStderrFile   *os.File
+	errSessionHeader string
+	errHeaderPending bool
 )
 
 type multi struct {
@@ -116,7 +119,30 @@ func InitErrorFile(path string) error {
 	}
 	errMu.Lock()
 	defer errMu.Unlock()
+	return openErrorFileLocked(path)
+}
 
+func SetErrorFile(path string) error {
+	errMu.Lock()
+	defer errMu.Unlock()
+
+	if path == "" {
+		if origStderr != 0 {
+			unix.Dup2(origStderr, int(os.Stderr.Fd()))
+		}
+		if errFile != nil {
+			_ = errFile.Sync()
+			_ = errFile.Close()
+			errFile = nil
+			errLogger = nil
+		}
+		errHeaderPending = false
+		return nil
+	}
+	return openErrorFileLocked(path)
+}
+
+func openErrorFileLocked(path string) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("failed to create log directory: %w", err)
@@ -130,23 +156,42 @@ func InitErrorFile(path string) error {
 	if err != nil {
 		return err
 	}
+
+	// Capture the true original stderr (terminal / journald pipe) once, before
+	// redirecting fd 2. Verbose console logging keeps flowing to it via the
+	// MultiWriter set up in Init, so the error file stays error-level only;
+	// fd 2 is redirected to the file only so Go panics/fatals are captured.
+	if origStderr == 0 {
+		origStderr, _ = unix.Dup(int(os.Stderr.Fd()))
+	}
+	unix.Dup2(int(f.Fd()), int(os.Stderr.Fd()))
+
+	old := errFile
 	errFile = f
 	errLogger = log.New(f, "", log.Ldate|log.Ltime|log.Lmicroseconds)
 
-	fmt.Fprintf(f, "=== b4 started pid=%d at %s ===\n",
+	errSessionHeader = fmt.Sprintf("=== b4 error log opened pid=%d at %s ===\n",
 		os.Getpid(), time.Now().Format(time.RFC3339))
+	errHeaderPending = true
 
-	origStderr, _ = unix.Dup(int(os.Stderr.Fd()))
-	unix.Dup2(int(f.Fd()), int(os.Stderr.Fd()))
+	if old != nil {
+		_ = old.Sync()
+		_ = old.Close()
+	}
 
 	return nil
 }
 
 func OrigStderr() *os.File {
-	if origStderr == 0 {
-		return os.Stderr
+	errMu.Lock()
+	defer errMu.Unlock()
+	if origStderrFile == nil {
+		if origStderr == 0 {
+			origStderr, _ = unix.Dup(int(os.Stderr.Fd()))
+		}
+		origStderrFile = os.NewFile(uintptr(origStderr), "stderr")
 	}
-	return os.NewFile(uintptr(origStderr), "stderr")
+	return origStderrFile
 }
 
 func CloseErrorFile() {
@@ -166,6 +211,10 @@ func Errorf(format string, a ...any) error {
 
 	errMu.Lock()
 	if errLogger != nil {
+		if errHeaderPending && errFile != nil {
+			_, _ = errFile.WriteString(errSessionHeader)
+			errHeaderPending = false
+		}
 		errLogger.Println(msg)
 		if errFile != nil {
 			_ = errFile.Sync()

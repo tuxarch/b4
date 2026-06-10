@@ -522,6 +522,40 @@ stop_b4() {
     sleep 2
 }
 
+b4_running_cmdline() {
+    _pid=""
+    if command_exists pgrep; then
+        _pid=$(pgrep -x "$BINARY_NAME" 2>/dev/null | head -1)
+    fi
+    [ -z "$_pid" ] && return 1
+    if [ -r "/proc/${_pid}/cmdline" ]; then
+        tr '\0' ' ' <"/proc/${_pid}/cmdline" 2>/dev/null | sed 's/ *$//'
+        return 0
+    fi
+    return 1
+}
+
+relaunch_b4() {
+    _cmd="$1"
+    [ -z "$_cmd" ] && return 1
+    # Re-exec the captured argv words directly — no shell re-parse of the
+    # cmdline (avoids interpreting ; $ ` etc.). Disable globbing so a literal
+    # * in an arg isn't expanded, then restore the caller's noglob state.
+    case "$-" in
+    *f*) _had_noglob=1 ;;
+    *) _had_noglob=0 ;;
+    esac
+    set -f
+    if command_exists setsid; then
+        setsid $_cmd >/dev/null 2>&1 &
+    else
+        nohup $_cmd >/dev/null 2>&1 &
+    fi
+    if [ "$_had_noglob" = 0 ]; then set +f; fi
+    sleep 2
+    is_b4_running
+}
+
 # --- Directory helpers ---
 is_writable_dir() {
     dir="$1"
