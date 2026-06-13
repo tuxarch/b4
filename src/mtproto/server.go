@@ -16,12 +16,18 @@ import (
 )
 
 const (
-	maxConnections = 512
-	relayBufSize   = 65536
+	defaultMaxConnections = 2048
+	relayBufSize          = 65536
 )
 
+func mtprotoMaxConnections(cfg *config.Config) int {
+	if n := cfg.System.MTProto.MaxConnections; n > 0 {
+		return n
+	}
+	return defaultMaxConnections
+}
+
 type Server struct {
-	connSem chan struct{}
 	bufPool sync.Pool
 	active  atomic.Int64
 
@@ -38,7 +44,6 @@ type Server struct {
 
 func NewServer(cfg *config.Config) *Server {
 	s := &Server{
-		connSem: make(chan struct{}, maxConnections),
 		bufPool: sync.Pool{
 			New: func() interface{} {
 				buf := make([]byte, relayBufSize)
@@ -204,10 +209,10 @@ func (s *Server) acceptLoop(ln net.Listener) {
 			continue
 		}
 
-		select {
-		case s.connSem <- struct{}{}:
-		default:
-			log.Tracef("MTProto connection limit reached")
+		limit := int64(mtprotoMaxConnections(s.cfg.Load()))
+		if s.active.Add(1) > limit {
+			s.active.Add(-1)
+			log.Tracef("MTProto connection limit reached (%d)", limit)
 			conn.Close()
 			continue
 		}
@@ -219,11 +224,9 @@ func (s *Server) acceptLoop(ln net.Listener) {
 			_ = tc.SetWriteBuffer(256 * 1024)
 		}
 
-		s.active.Add(1)
 		go func(c net.Conn) {
 			defer func() {
 				c.Close()
-				<-s.connSem
 				s.active.Add(-1)
 			}()
 			s.handleConn(c)

@@ -36,7 +36,7 @@ func nftHandleFromLine(line string) string {
 	return strings.TrimSpace(line[idx+len("# handle "):])
 }
 
-const proxyRulePriority = 5
+const proxyRulePriority = 3
 
 const proxyLocalDeliveryTable = 252
 
@@ -518,39 +518,26 @@ func sweepProxyInputAcceptsNft() {
 }
 
 func sweepProxyInputAcceptsIpt(cmd string) {
-	out, err := run(cmd, "-w", "-S", "INPUT")
-	if err != nil {
-		return
-	}
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "-A INPUT ") || !strings.HasSuffix(line, "-j ACCEPT") || !strings.Contains(line, "-m mark --mark ") {
-			continue
+	iptDeleteListedLines(cmd, "filter", "INPUT", func(line string) bool {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[1] != "ACCEPT" || !strings.Contains(line, "mark match") {
+			return false
 		}
 		m, ok := iptMarkFromRule(line)
-		if !ok || !tproxy.InMarkRange(m) {
-			continue
-		}
-		args := strings.Fields(line)
-		args[0] = "-D"
-		runLogged("routing: sweep input accept (proxy)", append([]string{cmd, "-w"}, args...)...)
-	}
+		return ok && tproxy.InMarkRange(m)
+	})
 }
 
 func iptMarkFromRule(line string) (uint32, bool) {
-	fields := strings.Fields(line)
-	for i, f := range fields {
-		if f != "--mark" || i+1 >= len(fields) {
-			continue
-		}
-		parts := strings.Split(fields[i+1], "/")
+	for _, f := range strings.Fields(line) {
+		parts := strings.Split(f, "/")
 		if len(parts) != 2 {
-			return 0, false
+			continue
 		}
 		a, errA := strconv.ParseUint(strings.TrimPrefix(parts[0], "0x"), 16, 32)
 		b, errB := strconv.ParseUint(strings.TrimPrefix(parts[1], "0x"), 16, 32)
 		if errA != nil || errB != nil || a != b {
-			return 0, false
+			continue
 		}
 		return uint32(a), true
 	}

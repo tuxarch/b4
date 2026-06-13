@@ -267,9 +267,9 @@ func (c *Config) Validate() error {
 		return v.result()
 	}
 
-	const perSetReachableBits uint32 = 0x17FFF
+	const perSetReachableBits uint32 = 0x27FFF
 	if c.Queue.Mark != 0 && uint32(c.Queue.Mark)&^perSetReachableBits == 0 {
-		v.addf("queue.mark", "mark_conflict", map[string]any{"mark": fmt.Sprintf("0x%x", c.Queue.Mark)}, "mark value 0x%x conflicts with per-set mark bits {0-14, 16}; bypass rule would catch TPROXY-redirected traffic. Use a value with at least one bit in {15, 17-31} (default 0x8000 has bit 15)", c.Queue.Mark)
+		v.addf("queue.mark", "mark_conflict", map[string]any{"mark": fmt.Sprintf("0x%x", c.Queue.Mark)}, "mark value 0x%x conflicts with per-set mark bits {0-14, 17}; bypass rule would catch TPROXY-redirected traffic. Use a value with at least one bit in {15-16, 18-31} (default 0x8000 has bit 15)", c.Queue.Mark)
 		return v.result()
 	}
 
@@ -340,6 +340,11 @@ func (c *Config) checkPortCollisions(v *validator) {
 					map[string]any{"value": h},
 					"ws_endpoint_host must be a host or IP without port (got %q)", h)
 			}
+		}
+		if mc := c.System.MTProto.MaxConnections; mc < 0 || mc > 100000 {
+			v.addf("system.mtproto.max_connections", "out_of_range",
+				map[string]any{"value": mc, "min": 0, "max": 100000},
+				"max_connections must be between 0 (default) and 100000 (got %d)", mc)
 		}
 	}
 	for i := 0; i < len(refs); i++ {
