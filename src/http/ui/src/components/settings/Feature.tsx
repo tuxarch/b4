@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ToggleOnIcon } from "@b4.icons";
 import { B4Config } from "@models/config";
@@ -10,7 +11,9 @@ import {
   B4Alert,
   B4Badge,
   B4TextField,
+  B4ChipList,
 } from "@b4.elements";
+import SettingAutocomplete from "@common/B4Autocomplete";
 import { Box, Typography } from "@mui/material";
 import { SettingsPropHandlerType } from "@models/settings";
 
@@ -21,6 +24,20 @@ interface FeatureSettingsProps {
 
 export const FeatureSettings = ({ config, onChange }: FeatureSettingsProps) => {
   const { t } = useTranslation();
+  const [newRoute, setNewRoute] = useState("");
+
+  const tunRoutes = config.queue.tun?.routes ?? [];
+  const addTunRoute = (value: string) => {
+    const r = value.trim();
+    if (!r || tunRoutes.includes(r)) return;
+    onChange("queue.tun.routes", [...tunRoutes, r]);
+  };
+  const removeTunRoute = (value: string) => {
+    onChange(
+      "queue.tun.routes",
+      tunRoutes.filter((x) => x !== value),
+    );
+  };
 
   const handleInterfaceToggle = (iface: string) => {
     const current = config.queue.interfaces || [];
@@ -29,6 +46,17 @@ export const FeatureSettings = ({ config, onChange }: FeatureSettingsProps) => {
       : [...current, iface];
     onChange("queue.interfaces", updated);
   };
+
+  const masqueradeSwitch = (
+    <B4Switch
+      label={t("settings.Feature.natMasquerade")}
+      checked={config.system.tables.masquerade}
+      onChange={(checked: boolean) =>
+        onChange("system.tables.masquerade", checked)
+      }
+      description={t("settings.Feature.natMasqueradeDesc")}
+    />
+  );
 
   return (
     <B4Section
@@ -61,132 +89,133 @@ export const FeatureSettings = ({ config, onChange }: FeatureSettingsProps) => {
             )
           }
           options={[
-            { value: "nfqueue", label: t("settings.Feature.engineModeNfqueue") },
+            {
+              value: "nfqueue",
+              label: t("settings.Feature.engineModeNfqueue"),
+            },
             { value: "tun", label: t("settings.Feature.engineModeTun") },
           ]}
           helperText={t("settings.Feature.engineModeHelp")}
         />
       </B4FormGroup>
       {config.queue.mode === "tun" && (
-        <B4FormGroup label={t("settings.Feature.tunSettings")} columns={1}>
-          <Box>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-              {t("settings.Feature.tunOutInterfaceDesc")}
-            </Typography>
-            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
-              {(config.available_ifaces ?? []).map((iface) => {
-                const isSelected = config.queue.tun?.out_interface === iface;
-                return (
-                  <B4Badge
-                    key={iface}
-                    label={iface}
-                    onClick={() =>
-                      onChange(
-                        "queue.tun.out_interface",
-                        isSelected ? "" : iface,
-                      )
-                    }
-                    variant={isSelected ? "filled" : "outlined"}
-                    color={"primary"}
-                  />
-                );
-              })}
-            </Box>
-            {!config.queue.tun?.out_interface && (
-              <B4Alert severity="warning" sx={{ mt: 1 }}>
-                {t("settings.Feature.tunOutInterfaceRequired")}
-              </B4Alert>
-            )}
-          </Box>
+        <B4FormGroup label={t("settings.Feature.tunSettings")} columns={2}>
+          <B4Select
+            label={t("settings.Feature.tunOutInterface")}
+            value={config.queue.tun?.out_interface || ""}
+            onChange={(e) =>
+              onChange("queue.tun.out_interface", e.target.value)
+            }
+            options={[
+              { value: "", label: t("settings.Feature.tunOutInterfaceNone") },
+              ...(config.available_ifaces ?? []).map((i) => ({
+                value: i,
+                label: i,
+              })),
+            ]}
+            helperText={t("settings.Feature.tunOutInterfaceDesc")}
+          />
           <B4TextField
             label={t("settings.Feature.tunOutGateway")}
             value={config.queue.tun?.out_gateway || ""}
             onChange={(e) => onChange("queue.tun.out_gateway", e.target.value)}
+            placeholder={t("settings.Feature.tunOutGatewayPlaceholder")}
             helperText={t("settings.Feature.tunOutGatewayHelp")}
+            selectOnFocus
           />
           <B4TextField
             label={t("settings.Feature.tunAddress")}
-            value={config.queue.tun?.address || ""}
+            value={config.queue.tun?.address || "10.255.0.1/30"}
             onChange={(e) => onChange("queue.tun.address", e.target.value)}
-            placeholder="10.255.0.1/30"
             helperText={t("settings.Feature.tunAddressHelp")}
+            selectOnFocus
           />
           <B4TextField
             label={t("settings.Feature.tunDeviceName")}
-            value={config.queue.tun?.device_name || ""}
+            value={config.queue.tun?.device_name || "b4tun0"}
             onChange={(e) => onChange("queue.tun.device_name", e.target.value)}
-            placeholder="b4tun0"
             helperText={t("settings.Feature.tunDeviceNameHelp")}
+            selectOnFocus
           />
-          <B4TextField
+          {!config.queue.tun?.out_interface && (
+            <B4Alert severity="warning">
+              {t("settings.Feature.tunOutInterfaceRequired")}
+            </B4Alert>
+          )}
+        </B4FormGroup>
+      )}
+      {config.queue.mode === "tun" && (
+        <B4FormGroup label={t("settings.Feature.tunRoutes")} columns={1}>
+          <SettingAutocomplete
             label={t("settings.Feature.tunRoutes")}
-            value={(config.queue.tun?.routes || []).join(", ")}
-            onChange={(e) =>
-              onChange(
-                "queue.tun.routes",
-                e.target.value
-                  .split(/[\s,]+/)
-                  .map((s) => s.trim())
-                  .filter(Boolean),
-              )
-            }
+            value={newRoute}
+            options={[]}
+            onChange={setNewRoute}
+            onSelect={addTunRoute}
+            placeholder={t("settings.Feature.tunRoutesPlaceholder")}
             helperText={t("settings.Feature.tunRoutesHelp")}
+          />
+          <B4ChipList
+            items={tunRoutes}
+            getKey={(c) => c}
+            getLabel={(c) => c}
+            onDelete={removeTunRoute}
           />
         </B4FormGroup>
       )}
-      <B4FormGroup label={t("settings.Feature.firewallFeatures")} columns={2}>
-        <B4Switch
-          label={t("settings.Feature.skipIptables")}
-          checked={config.system.tables.skip_setup}
-          onChange={(checked: boolean) =>
-            onChange("system.tables.skip_setup", checked)
-          }
-          description={t("settings.Feature.skipIptablesDesc")}
-        />
-        <B4Slider
-          label={t("settings.Feature.firewallMonitorInterval")}
-          value={config.system.tables.monitor_interval}
-          onChange={(value: number) =>
-            onChange("system.tables.monitor_interval", value)
-          }
-          min={0}
-          max={120}
-          step={5}
-          helperText={t("settings.Feature.firewallMonitorHelp")}
-          alert={
-            config.system.tables.monitor_interval <= 0 && (
-              <B4Alert severity="warning">
-                {t("settings.Feature.firewallMonitorWarning")}
-              </B4Alert>
-            )
-          }
-        />
-        <B4Select
-          label={t("settings.Feature.firewallEngine")}
-          value={config.system.tables.engine || "auto"}
-          onChange={(e) =>
-            onChange(
-              "system.tables.engine",
-              e.target.value === "auto" ? "" : e.target.value,
-            )
-          }
-          options={[
-            { value: "auto", label: t("settings.Feature.engineAuto") },
-            { value: "nftables", label: "nftables" },
-            { value: "iptables", label: "iptables" },
-            { value: "iptables-legacy", label: "iptables-legacy" },
-          ]}
-          helperText={t("settings.Feature.firewallEngineHelp")}
-        />
-        <B4Switch
-          label={t("settings.Feature.natMasquerade")}
-          checked={config.system.tables.masquerade}
-          onChange={(checked: boolean) =>
-            onChange("system.tables.masquerade", checked)
-          }
-          description={t("settings.Feature.natMasqueradeDesc")}
-        />
-      </B4FormGroup>
+      {config.queue.mode !== "tun" && (
+        <B4FormGroup label={t("settings.Feature.firewallFeatures")} columns={2}>
+          <B4Switch
+            label={t("settings.Feature.skipIptables")}
+            checked={config.system.tables.skip_setup}
+            onChange={(checked: boolean) =>
+              onChange("system.tables.skip_setup", checked)
+            }
+            description={t("settings.Feature.skipIptablesDesc")}
+          />
+          <B4Slider
+            label={t("settings.Feature.firewallMonitorInterval")}
+            value={config.system.tables.monitor_interval}
+            onChange={(value: number) =>
+              onChange("system.tables.monitor_interval", value)
+            }
+            min={0}
+            max={120}
+            step={5}
+            helperText={t("settings.Feature.firewallMonitorHelp")}
+            alert={
+              config.system.tables.monitor_interval <= 0 && (
+                <B4Alert severity="warning">
+                  {t("settings.Feature.firewallMonitorWarning")}
+                </B4Alert>
+              )
+            }
+          />
+          <B4Select
+            label={t("settings.Feature.firewallEngine")}
+            value={config.system.tables.engine || "auto"}
+            onChange={(e) =>
+              onChange(
+                "system.tables.engine",
+                e.target.value === "auto" ? "" : e.target.value,
+              )
+            }
+            options={[
+              { value: "auto", label: t("settings.Feature.engineAuto") },
+              { value: "nftables", label: "nftables" },
+              { value: "iptables", label: "iptables" },
+              { value: "iptables-legacy", label: "iptables-legacy" },
+            ]}
+            helperText={t("settings.Feature.firewallEngineHelp")}
+          />
+          {masqueradeSwitch}
+        </B4FormGroup>
+      )}
+      {config.queue.mode === "tun" && (
+        <B4FormGroup label={t("settings.Feature.firewallFeatures")} columns={2}>
+          {masqueradeSwitch}
+        </B4FormGroup>
+      )}
       {config.system.tables.masquerade && (
         <B4FormGroup
           label={t("settings.Feature.masqueradeInterface")}
@@ -229,39 +258,44 @@ export const FeatureSettings = ({ config, onChange }: FeatureSettingsProps) => {
           </Box>
         </B4FormGroup>
       )}
-      <B4FormGroup label={t("settings.Feature.networkInterfaces")} columns={1}>
-        <Box>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-            {t("settings.Feature.networkInterfacesDesc")}
-          </Typography>
-          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
-            {(config.available_ifaces ?? []).map((iface) => {
-              const isSelected = (config.queue.interfaces || []).includes(
-                iface,
-              );
-              return (
-                <B4Badge
-                  key={iface}
-                  label={iface}
-                  onClick={() => handleInterfaceToggle(iface)}
-                  variant={isSelected ? "filled" : "outlined"}
-                  color={"primary"}
-                />
-              );
-            })}
+      {config.queue.mode !== "tun" && (
+        <B4FormGroup
+          label={t("settings.Feature.networkInterfaces")}
+          columns={1}
+        >
+          <Box>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+              {t("settings.Feature.networkInterfacesDesc")}
+            </Typography>
+            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
+              {(config.available_ifaces ?? []).map((iface) => {
+                const isSelected = (config.queue.interfaces || []).includes(
+                  iface,
+                );
+                return (
+                  <B4Badge
+                    key={iface}
+                    label={iface}
+                    onClick={() => handleInterfaceToggle(iface)}
+                    variant={isSelected ? "filled" : "outlined"}
+                    color={"primary"}
+                  />
+                );
+              })}
+            </Box>
+            {(config.available_ifaces ?? []).length === 0 && (
+              <B4Alert severity="warning" sx={{ mt: 1 }}>
+                {t("settings.Feature.noInterfacesDetected")}
+              </B4Alert>
+            )}
+            {config.queue.interfaces?.length === 0 && (
+              <B4Alert severity="info" sx={{ mt: 2 }}>
+                {t("settings.Feature.listenAllInterfaces")}
+              </B4Alert>
+            )}
           </Box>
-          {(config.available_ifaces ?? []).length === 0 && (
-            <B4Alert severity="warning" sx={{ mt: 1 }}>
-              {t("settings.Feature.noInterfacesDetected")}
-            </B4Alert>
-          )}
-          {config.queue.interfaces?.length === 0 && (
-            <B4Alert severity="info" sx={{ mt: 2 }}>
-              {t("settings.Feature.listenAllInterfaces")}
-            </B4Alert>
-          )}
-        </Box>
-      </B4FormGroup>
+        </B4FormGroup>
+      )}
     </B4Section>
   );
 };
