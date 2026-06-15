@@ -9,6 +9,7 @@ import {
   B4Select,
   B4Alert,
   B4Badge,
+  B4TextField,
 } from "@b4.elements";
 import { Box, Typography } from "@mui/material";
 import { SettingsPropHandlerType } from "@models/settings";
@@ -49,6 +50,90 @@ export const FeatureSettings = ({ config, onChange }: FeatureSettingsProps) => {
           description={t("settings.Feature.enableIPv6Desc")}
         />
       </B4FormGroup>
+      <B4FormGroup label={t("settings.Feature.engineMode")} columns={1}>
+        <B4Select
+          label={t("settings.Feature.engineModeLabel")}
+          value={config.queue.mode || "nfqueue"}
+          onChange={(e) =>
+            onChange(
+              "queue.mode",
+              e.target.value === "nfqueue" ? "" : e.target.value,
+            )
+          }
+          options={[
+            { value: "nfqueue", label: t("settings.Feature.engineModeNfqueue") },
+            { value: "tun", label: t("settings.Feature.engineModeTun") },
+          ]}
+          helperText={t("settings.Feature.engineModeHelp")}
+        />
+      </B4FormGroup>
+      {config.queue.mode === "tun" && (
+        <B4FormGroup label={t("settings.Feature.tunSettings")} columns={1}>
+          <Box>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+              {t("settings.Feature.tunOutInterfaceDesc")}
+            </Typography>
+            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
+              {(config.available_ifaces ?? []).map((iface) => {
+                const isSelected = config.queue.tun?.out_interface === iface;
+                return (
+                  <B4Badge
+                    key={iface}
+                    label={iface}
+                    onClick={() =>
+                      onChange(
+                        "queue.tun.out_interface",
+                        isSelected ? "" : iface,
+                      )
+                    }
+                    variant={isSelected ? "filled" : "outlined"}
+                    color={"primary"}
+                  />
+                );
+              })}
+            </Box>
+            {!config.queue.tun?.out_interface && (
+              <B4Alert severity="warning" sx={{ mt: 1 }}>
+                {t("settings.Feature.tunOutInterfaceRequired")}
+              </B4Alert>
+            )}
+          </Box>
+          <B4TextField
+            label={t("settings.Feature.tunOutGateway")}
+            value={config.queue.tun?.out_gateway || ""}
+            onChange={(e) => onChange("queue.tun.out_gateway", e.target.value)}
+            helperText={t("settings.Feature.tunOutGatewayHelp")}
+          />
+          <B4TextField
+            label={t("settings.Feature.tunAddress")}
+            value={config.queue.tun?.address || ""}
+            onChange={(e) => onChange("queue.tun.address", e.target.value)}
+            placeholder="10.255.0.1/30"
+            helperText={t("settings.Feature.tunAddressHelp")}
+          />
+          <B4TextField
+            label={t("settings.Feature.tunDeviceName")}
+            value={config.queue.tun?.device_name || ""}
+            onChange={(e) => onChange("queue.tun.device_name", e.target.value)}
+            placeholder="b4tun0"
+            helperText={t("settings.Feature.tunDeviceNameHelp")}
+          />
+          <B4TextField
+            label={t("settings.Feature.tunRoutes")}
+            value={(config.queue.tun?.routes || []).join(", ")}
+            onChange={(e) =>
+              onChange(
+                "queue.tun.routes",
+                e.target.value
+                  .split(/[\s,]+/)
+                  .map((s) => s.trim())
+                  .filter(Boolean),
+              )
+            }
+            helperText={t("settings.Feature.tunRoutesHelp")}
+          />
+        </B4FormGroup>
+      )}
       <B4FormGroup label={t("settings.Feature.firewallFeatures")} columns={2}>
         <B4Switch
           label={t("settings.Feature.skipIptables")}
