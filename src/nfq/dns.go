@@ -213,7 +213,8 @@ func (w *Worker) processDnsPacket(vc *verdictCtx, ipVersion byte, sport uint16, 
 			}
 
 			if TUNRouteFunc != nil && domain != "" {
-				if matched, set := w.getMatcher().MatchSNIWithSource(domain, srcMac); matched && set.Enabled {
+				clientMac := w.getMacByIp(clientIP.String())
+				if matched, set := w.getMatcher().MatchSNIWithSource(domain, clientMac); matched && set.Enabled {
 					for _, ip := range dns.ParseResponseIPs(payload) {
 						registerTUNRoute(ip)
 					}

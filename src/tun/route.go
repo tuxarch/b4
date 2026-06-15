@@ -32,8 +32,12 @@ func (r *routeManager) selective() bool {
 }
 
 func (r *routeManager) addRoute(prefix string) bool {
+	if strings.Contains(prefix, ":") {
+		log.Warnf("TUN: IPv6 target %s not routed (IPv6 TUN routing not yet supported); traffic stays on the normal path", prefix)
+		return false
+	}
 	args := []string{"ip", "route", "add", prefix, "dev", r.tunName}
-	if r.srcIP != "" && strings.Count(prefix, ":") == 0 {
+	if r.srcIP != "" {
 		args = append(args, "src", r.srcIP)
 	}
 	if _, err := run(args...); err != nil {
