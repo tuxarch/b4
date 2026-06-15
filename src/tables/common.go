@@ -75,6 +75,9 @@ func ApplyMasqueradeOnly(cfg *config.Config) error {
 }
 
 func ClearMasqueradeOnly(cfg *config.Config) {
+	if !cfg.System.Tables.Masquerade {
+		return
+	}
 	backend := detectFirewallBackend(cfg)
 	if backend == backendNFTables {
 		NewNFTablesManager(cfg).ClearMasquerade()
