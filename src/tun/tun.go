@@ -124,6 +124,7 @@ func (e *Engine) Start() error {
 	sender, err := sock.NewSenderWithMarkDevice(int(cfg.Queue.Mark), tunCfg.OutInterface)
 	if err != nil {
 		e.tunFile.Close()
+		run("ip", "link", "del", name)
 		return err
 	}
 	e.sender = sender
