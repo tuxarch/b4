@@ -99,11 +99,11 @@ func (r *routeManager) Add(prefix string) {
 }
 
 func (r *routeManager) setup() error {
-	out, err := run("ip", "route", "show", "default")
+	out, err := run("ip", "-4", "route", "show", "default")
 	if err != nil {
 		return fmt.Errorf("failed to read current default route: %w", err)
 	}
-	r.savedDefault = strings.TrimSpace(out)
+	r.savedDefault = strings.TrimSpace(strings.SplitN(out, "\n", 2)[0])
 	log.Infof("TUN: saved default route: %s", r.savedDefault)
 
 	if r.outGateway == "" {
