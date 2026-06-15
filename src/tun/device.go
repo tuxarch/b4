@@ -56,3 +56,13 @@ func openTUN(name string) (*os.File, string, error) {
 	file := os.NewFile(uintptr(fd), tunDevice)
 	return file, actualName, nil
 }
+
+func interfaceExists(name string) bool {
+	_, err := os.Stat("/sys/class/net/" + name)
+	return err == nil
+}
+
+func isTunDevice(name string) bool {
+	_, err := os.Stat("/sys/class/net/" + name + "/tun_flags")
+	return err == nil
+}
