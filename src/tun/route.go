@@ -189,12 +189,20 @@ func (r *routeManager) setupBypassTable() error {
 	}
 
 	markStr := fmt.Sprintf("0x%x", r.mark)
-	run("ip", "rule", "del", "fwmark", markStr, "lookup", tableStr)
+	r.delFwmarkRule(markStr, tableStr)
 
 	if _, err := run("ip", "rule", "add", "fwmark", markStr, "lookup", tableStr, "priority", "100"); err != nil {
 		return fmt.Errorf("ip rule add: %w", err)
 	}
 	return r.addBypassDefault(tableStr)
+}
+
+func (r *routeManager) delFwmarkRule(markStr, tableStr string) {
+	for {
+		if _, err := run("ip", "rule", "del", "fwmark", markStr, "lookup", tableStr); err != nil {
+			return
+		}
+	}
 }
 
 func (r *routeManager) setupSelective(srcIP string) error {
@@ -278,9 +286,7 @@ func (r *routeManager) teardown() {
 		}
 	}
 
-	if _, err := run("ip", "rule", "del", "fwmark", markStr, "lookup", tableStr); err != nil {
-		log.Warnf("TUN: failed to delete ip rule: %v", err)
-	}
+	r.delFwmarkRule(markStr, tableStr)
 	if _, err := run("ip", "route", "flush", "table", tableStr); err != nil {
 		log.Warnf("TUN: failed to flush route table %s: %v", tableStr, err)
 	}
