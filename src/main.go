@@ -356,8 +356,10 @@ func runB4(cmd *cobra.Command, args []string) error {
 		mtprotoBridge.UpdateConfig(c)
 		startCFRefresh(c)
 		tproxyResolver.Set(pool.GetMatcher())
-		tproxyMgr.SyncConfig(c)
-		tables.RoutingSyncConfig(c)
+		if tunEngine == nil && !c.System.Tables.SkipSetup {
+			tproxyMgr.SyncConfig(c)
+			tables.RoutingSyncConfig(c)
+		}
 		aiManager.Update(c.System.AI)
 		if _, err := config.ApplyMemoryLimit(c.System.MemoryLimit); err != nil {
 			log.Errorf("invalid system.memory_limit %q: %v", c.System.MemoryLimit, err)
