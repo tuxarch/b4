@@ -60,7 +60,9 @@ func NewSenderWithMarkDevice(mark int, device string) (*Sender, error) {
 		}
 		if device != "" {
 			if err := syscall.SetsockoptString(s.fd6, syscall.SOL_SOCKET, unix.SO_BINDTODEVICE, device); err != nil {
-				log.Warnf("Failed to bind IPv6 socket to %s: %v", device, err)
+				log.Warnf("Failed to bind IPv6 socket to %s: %v - IPv6 bypass disabled", device, err)
+				_ = syscall.Close(s.fd6)
+				s.fd6 = -1
 			}
 		}
 	}
