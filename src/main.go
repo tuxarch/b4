@@ -245,6 +245,7 @@ func runB4(cmd *cobra.Command, args []string) error {
 
 		tunEngine = b4tun.NewEngine(&cfg, pool)
 		if err := tunEngine.Start(); err != nil {
+			tables.ClearMasqueradeOnly(&cfg)
 			metrics.RecordEvent("error", fmt.Sprintf("TUN engine start failed: %v", err))
 			metrics.NFQueueStatus = "error"
 			return fmt.Errorf("TUN engine start failed: %w", err)
