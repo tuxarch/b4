@@ -23,6 +23,10 @@ type ifreqFlags struct {
 }
 
 func openTUN(name string) (*os.File, string, error) {
+	if len(name) >= ifnamsiz {
+		return nil, "", fmt.Errorf("tun device name too long: %q (max %d)", name, ifnamsiz-1)
+	}
+
 	fd, err := unix.Open(tunDevice, unix.O_RDWR|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, "", fmt.Errorf("open %s: %w", tunDevice, err)
