@@ -180,7 +180,7 @@ func (r *routeManager) restoreRPFilter() {
 func (r *routeManager) setupBypassTable() error {
 	tableStr := fmt.Sprintf("%d", r.routeTable)
 
-	if existing, _ := run("ip", "route", "show", "table", tableStr); strings.TrimSpace(existing) != "" {
+	if existing, err := run("ip", "route", "show", "table", tableStr); err == nil && strings.TrimSpace(existing) != "" {
 		return fmt.Errorf("route table %d is already in use (likely a system table; see /etc/iproute2/rt_tables) - set queue.tun.route_table to an unused id", r.routeTable)
 	}
 
