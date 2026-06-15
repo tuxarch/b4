@@ -183,18 +183,35 @@ func (r *routeManager) restoreRPFilter() {
 
 func (r *routeManager) setupBypassTable() error {
 	tableStr := fmt.Sprintf("%d", r.routeTable)
+	markStr := fmt.Sprintf("0x%x", r.mark)
 
 	if existing, err := run("ip", "route", "show", "table", tableStr); err == nil && strings.TrimSpace(existing) != "" {
-		return fmt.Errorf("route table %d is already in use (likely a system table; see /etc/iproute2/rt_tables) - set queue.tun.route_table to an unused id", r.routeTable)
+		if !r.ownsBypassTable(markStr, tableStr) {
+			return fmt.Errorf("route table %d is already in use (likely a system table; see /etc/iproute2/rt_tables) - set queue.tun.route_table to an unused id", r.routeTable)
+		}
+		log.Infof("TUN: reusing route table %d left by a previous run (flushing stale entries)", r.routeTable)
+		run("ip", "route", "flush", "table", tableStr)
 	}
 
-	markStr := fmt.Sprintf("0x%x", r.mark)
 	r.delFwmarkRule(markStr, tableStr)
 
 	if _, err := run("ip", "rule", "add", "fwmark", markStr, "lookup", tableStr, "priority", "100"); err != nil {
 		return fmt.Errorf("ip rule add: %w", err)
 	}
 	return r.addBypassDefault(tableStr)
+}
+
+func (r *routeManager) ownsBypassTable(markStr, tableStr string) bool {
+	out, err := run("ip", "rule", "show")
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "fwmark "+markStr) && strings.Contains(line, "lookup "+tableStr) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *routeManager) delFwmarkRule(markStr, tableStr string) {
