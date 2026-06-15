@@ -36,7 +36,7 @@ func (r *routeManager) addRoute(prefix string) bool {
 		log.Warnf("TUN: IPv6 target %s not routed (IPv6 TUN routing not yet supported); traffic stays on the normal path", prefix)
 		return false
 	}
-	args := []string{"ip", "route", "add", prefix, "dev", r.tunName}
+	args := []string{"ip", "route", "replace", prefix, "dev", r.tunName}
 	if r.srcIP != "" {
 		args = append(args, "src", r.srcIP)
 	}
@@ -279,13 +279,13 @@ func interfacePrimaryIPv4(iface string) string {
 }
 
 func (r *routeManager) addBypassDefault(tableStr string) error {
-	args := []string{"ip", "route", "add", "default"}
+	args := []string{"ip", "route", "replace", "default"}
 	if r.outGateway != "" {
 		args = append(args, "via", r.outGateway)
 	}
 	args = append(args, "dev", r.outIface, "table", tableStr)
 	if _, err := run(args...); err != nil {
-		return fmt.Errorf("ip route add table: %w", err)
+		return fmt.Errorf("ip route replace table: %w", err)
 	}
 	return nil
 }
