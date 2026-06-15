@@ -87,12 +87,13 @@ type QueueConfig struct {
 }
 
 type TUNConfig struct {
-	DeviceName   string `json:"device_name"`
-	Address      string `json:"address"`
-	AddressV6    string `json:"address_v6"`
-	OutInterface string `json:"out_interface"`
-	OutGateway   string `json:"out_gateway"`
-	RouteTable   int    `json:"route_table"`
+	DeviceName   string   `json:"device_name"`
+	Address      string   `json:"address"`
+	AddressV6    string   `json:"address_v6"`
+	OutInterface string   `json:"out_interface"`
+	OutGateway   string   `json:"out_gateway"`
+	RouteTable   int      `json:"route_table"`
+	Routes       []string `json:"routes"`
 }
 
 type DevicesConfig struct {

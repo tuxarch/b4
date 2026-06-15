@@ -2,6 +2,7 @@ package tun
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -9,26 +10,20 @@ import (
 )
 
 type routeManager struct {
-	tunName      string
-	tunAddr      string
-	tunAddrV6    string
-	outIface     string
-	outGateway   string
-	mark         uint
-	routeTable   int
-	savedDefault string
+	tunName       string
+	tunAddr       string
+	tunAddrV6     string
+	outIface      string
+	outGateway    string
+	mark          uint
+	routeTable    int
+	routes        []string
+	savedDefault  string
+	savedRPFilter string
 }
 
-func newRouteManager(tunName, tunAddr, tunAddrV6, outIface, outGateway string, mark uint, routeTable int) *routeManager {
-	return &routeManager{
-		tunName:    tunName,
-		tunAddr:    tunAddr,
-		tunAddrV6:  tunAddrV6,
-		outIface:   outIface,
-		outGateway: outGateway,
-		mark:       mark,
-		routeTable: routeTable,
-	}
+func (r *routeManager) selective() bool {
+	return len(r.routes) > 0
 }
 
 func (r *routeManager) setup() error {
@@ -46,15 +41,6 @@ func (r *routeManager) setup() error {
 		} else {
 			log.Infof("TUN: no gateway on default route, treating %s as point-to-point", r.outIface)
 		}
-	}
-
-	tableStr := fmt.Sprintf("%d", r.routeTable)
-
-	// Refuse to clobber a table that is already in use (e.g. on ASUS Merlin
-	// table ids 100/200 are aliased to wan0/wan1 system tables). Bail before
-	// touching anything so the system is left untouched on collision.
-	if existing, _ := run("ip", "route", "show", "table", tableStr); strings.TrimSpace(existing) != "" {
-		return fmt.Errorf("route table %d is already in use (likely a system table; see /etc/iproute2/rt_tables) - set queue.tun.route_table to an unused id", r.routeTable)
 	}
 
 	// Source IP for router-originated traffic: without it the kernel picks the
@@ -79,13 +65,106 @@ func (r *routeManager) setup() error {
 		log.Warnf("TUN: failed to set MTU: %v", err)
 	}
 
+	r.loosenRPFilter()
+
+	if r.selective() {
+		return r.setupSelective(srcIP)
+	}
+	return r.setupDefaultCapture(srcIP)
+}
+
+func rpFilterPath(iface string) string {
+	return "/proc/sys/net/ipv4/conf/" + iface + "/rp_filter"
+}
+
+// loosenRPFilter switches the uplink to loose reverse-path filtering. With
+// targets routed via the TUN, their replies arrive on the uplink whose reverse
+// route points at the TUN - strict rp_filter (1) silently drops them. Loose
+// mode (2) only requires the source be reachable via any interface.
+func (r *routeManager) loosenRPFilter() {
+	path := rpFilterPath(r.outIface)
+	cur, err := os.ReadFile(path)
+	if err != nil {
+		log.Warnf("TUN: cannot read rp_filter for %s: %v", r.outIface, err)
+		return
+	}
+	r.savedRPFilter = strings.TrimSpace(string(cur))
+	if r.savedRPFilter == "2" {
+		return
+	}
+	if err := os.WriteFile(path, []byte("2\n"), 0644); err != nil {
+		log.Warnf("TUN: failed to set %s rp_filter=2 (loose): %v", r.outIface, err)
+		r.savedRPFilter = ""
+		return
+	}
+	log.Infof("TUN: set %s rp_filter=2 (loose) for asymmetric routing (was %s)", r.outIface, r.savedRPFilter)
+}
+
+func (r *routeManager) restoreRPFilter() {
+	if r.savedRPFilter == "" {
+		return
+	}
+	if err := os.WriteFile(rpFilterPath(r.outIface), []byte(r.savedRPFilter+"\n"), 0644); err != nil {
+		log.Warnf("TUN: failed to restore %s rp_filter: %v", r.outIface, err)
+	}
+}
+
+// setupBypassTable installs the fwmark policy-routing table that carries b4's
+// own marked re-injected packets out the uplink. It contains only a default via
+// the uplink (no TUN routes), so re-injected packets reach the internet without
+// being pulled back into the TUN - in both selective and default-capture modes.
+func (r *routeManager) setupBypassTable() error {
+	tableStr := fmt.Sprintf("%d", r.routeTable)
+
+	// Refuse to clobber a table that is already in use (e.g. on ASUS Merlin
+	// table ids 100/200 are aliased to wan0/wan1 system tables).
+	if existing, _ := run("ip", "route", "show", "table", tableStr); strings.TrimSpace(existing) != "" {
+		return fmt.Errorf("route table %d is already in use (likely a system table; see /etc/iproute2/rt_tables) - set queue.tun.route_table to an unused id", r.routeTable)
+	}
+
 	markStr := fmt.Sprintf("0x%x", r.mark)
 	run("ip", "rule", "del", "fwmark", markStr, "lookup", tableStr)
 
 	if _, err := run("ip", "rule", "add", "fwmark", markStr, "lookup", tableStr, "priority", "100"); err != nil {
 		return fmt.Errorf("ip rule add: %w", err)
 	}
-	if err := r.addBypassDefault(tableStr); err != nil {
+	return r.addBypassDefault(tableStr)
+}
+
+// setupSelective routes only the configured prefixes into the TUN, leaving the
+// system default route untouched.
+func (r *routeManager) setupSelective(srcIP string) error {
+	if err := r.setupBypassTable(); err != nil {
+		return err
+	}
+
+	added := 0
+	for _, p := range r.routes {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		args := []string{"ip", "route", "add", p, "dev", r.tunName}
+		if srcIP != "" && strings.Count(p, ":") == 0 {
+			args = append(args, "src", srcIP)
+		}
+		if _, err := run(args...); err != nil {
+			log.Warnf("TUN: failed to add selective route %s: %v", p, err)
+			continue
+		}
+		added++
+	}
+	if added == 0 {
+		return fmt.Errorf("selective routing: no routes could be added")
+	}
+	log.Infof("TUN: selective routing %d/%d prefixes into %s (default route untouched, mark=0x%x table=%d)",
+		added, len(r.routes), r.tunName, r.mark, r.routeTable)
+	return nil
+}
+
+// setupDefaultCapture replaces the whole default route with the TUN.
+func (r *routeManager) setupDefaultCapture(srcIP string) error {
+	if err := r.setupBypassTable(); err != nil {
 		return err
 	}
 
@@ -97,7 +176,7 @@ func (r *routeManager) setup() error {
 		return fmt.Errorf("ip route replace default: %w", err)
 	}
 
-	log.Infof("TUN: routing configured (tun=%s, out=%s gw=%q src=%q mark=0x%x table=%d)",
+	log.Infof("TUN: default-capture routing configured (tun=%s, out=%s gw=%q src=%q mark=0x%x table=%d)",
 		r.tunName, r.outIface, r.outGateway, srcIP, r.mark, r.routeTable)
 
 	return nil
@@ -133,7 +212,9 @@ func (r *routeManager) teardown() {
 	markStr := fmt.Sprintf("0x%x", r.mark)
 	tableStr := fmt.Sprintf("%d", r.routeTable)
 
-	if r.savedDefault != "" {
+	// Default-capture mode replaced the default route; selective mode never
+	// touched it (only the TUN's own host routes, which vanish with the device).
+	if !r.selective() && r.savedDefault != "" {
 		args := append([]string{"ip", "route", "replace"}, strings.Fields(r.savedDefault)...)
 		if _, err := run(args...); err != nil {
 			log.Errorf("TUN: failed to restore default route: %v", err)
@@ -151,6 +232,8 @@ func (r *routeManager) teardown() {
 	if _, err := run("ip", "link", "del", r.tunName); err != nil {
 		log.Warnf("TUN: failed to delete %s: %v", r.tunName, err)
 	}
+
+	r.restoreRPFilter()
 
 	log.Infof("TUN: routing teardown complete")
 }

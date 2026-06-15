@@ -75,7 +75,16 @@ func (e *Engine) Start() error {
 	}
 	e.sender = sender
 
-	e.routes = newRouteManager(name, address, tunCfg.AddressV6, tunCfg.OutInterface, tunCfg.OutGateway, e.cfg.Queue.Mark, routeTable)
+	e.routes = &routeManager{
+		tunName:    name,
+		tunAddr:    address,
+		tunAddrV6:  tunCfg.AddressV6,
+		outIface:   tunCfg.OutInterface,
+		outGateway: tunCfg.OutGateway,
+		mark:       e.cfg.Queue.Mark,
+		routeTable: routeTable,
+		routes:     tunCfg.Routes,
+	}
 	if err := e.routes.setup(); err != nil {
 		e.sender.Close()
 		e.tunFile.Close()
