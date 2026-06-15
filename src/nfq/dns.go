@@ -36,7 +36,6 @@ func getDoHClient(mark int) *http.Client {
 	return dohClient
 }
 
-// parseDNSName parses a DNS domain name from msg starting at the given offset.
 func parseDNSName(msg []byte, offset int) (string, bool) {
 	if offset < 0 || offset >= len(msg) {
 		return "", false
@@ -213,6 +212,14 @@ func (w *Worker) processDnsPacket(vc *verdictCtx, ipVersion byte, sport uint16, 
 				dnsServerIP = net.IP(raw[8:24])
 			}
 
+			if TUNRouteFunc != nil && domain != "" {
+				if matched, set := w.getMatcher().MatchSNIWithSource(domain, srcMac); matched && set.Enabled {
+					for _, ip := range dns.ParseResponseIPs(payload) {
+						registerTUNRoute(ip)
+					}
+				}
+			}
+
 			if setID, hit := consumeDNSPendingRoute(
 				dnsRouteKeyResponse(ipVersion, clientIP, dport, dnsServerIP, sport, txid, domain),
 			); hit {
@@ -264,6 +271,12 @@ func (w *Worker) resolveDNSRedirect(ipVersion byte, set *config.SetConfig, cfg *
 		}
 	}
 
+	if TUNRouteFunc != nil {
+		for _, ip := range dns.ParseResponseIPs(resp) {
+			registerTUNRoute(ip)
+		}
+	}
+
 	upstream := set.DNS.TargetDNS
 	if set.DNS.DoHURL != "" {
 		upstream = set.DNS.DoHURL
@@ -271,8 +284,6 @@ func (w *Worker) resolveDNSRedirect(ipVersion byte, set *config.SetConfig, cfg *
 	log.Tracef("DNS redirect: %s -> %s answered for %s with %d IPs (set: %s)", originalDst, upstream, clientIP, len(dns.ParseResponseIPs(resp)), set.Name)
 }
 
-// sendDNSResponseToClient crafts a UDP DNS reply (server -> client) and sends it
-// over the raw socket. No-op when resp is nil (unparseable query).
 func (w *Worker) sendDNSResponseToClient(ipVersion byte, originalDst, clientIP net.IP, clientPort uint16, resp []byte) {
 	if len(resp) == 0 {
 		return

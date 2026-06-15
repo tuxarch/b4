@@ -249,6 +249,7 @@ func runB4(cmd *cobra.Command, args []string) error {
 			metrics.NFQueueStatus = "error"
 			return fmt.Errorf("TUN engine start failed: %w", err)
 		}
+		nfq.TUNRouteFunc = tunEngine.AddRoute
 
 		metrics.TablesStatus = "tun"
 		metrics.NFQueueStatus = "active (tun)"
@@ -331,6 +332,9 @@ func runB4(cmd *cobra.Command, args []string) error {
 			if err := pool.UpdateConfig(c); err != nil {
 				return fmt.Errorf("failed to update pool config: %v", err)
 			}
+		}
+		if tunEngine != nil {
+			tunEngine.UpdateConfig(c)
 		}
 		if err := c.SaveToFile(c.ConfigPath); err != nil {
 			return fmt.Errorf("failed to save config: %v", err)

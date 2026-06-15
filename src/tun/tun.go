@@ -1,9 +1,11 @@
 package tun
 
 import (
+	"net"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/daniellavrushin/b4/config"
 	"github.com/daniellavrushin/b4/engine"
@@ -20,7 +22,7 @@ const (
 )
 
 type Engine struct {
-	cfg     *config.Config
+	cfg     atomic.Pointer[config.Config]
 	pool    *nfq.Pool
 	tunFile *os.File
 	tunName string
@@ -31,16 +33,32 @@ type Engine struct {
 }
 
 func NewEngine(cfg *config.Config, pool *nfq.Pool) *Engine {
-	return &Engine{
-		cfg:  cfg,
+	e := &Engine{
 		pool: pool,
 		quit: make(chan struct{}),
 	}
+	e.cfg.Store(cfg)
+	return e
 }
 
-// collectRoutes merges explicit tun.routes with the resolved IPs/CIDRs of every
-// enabled set. A non-empty result puts the engine in selective mode (only these
-// prefixes enter the TUN); empty falls back to whole-default capture.
+func (e *Engine) config() *config.Config {
+	return e.cfg.Load()
+}
+
+func (e *Engine) AddRoute(ip net.IP) {
+	if e.routes == nil || ip == nil {
+		return
+	}
+	e.routes.Add(ip.String())
+}
+
+func (e *Engine) UpdateConfig(cfg *config.Config) {
+	e.cfg.Store(cfg)
+	if e.routes != nil {
+		e.routes.Resync(e.collectRoutes())
+	}
+}
+
 func (e *Engine) collectRoutes() []string {
 	seen := make(map[string]bool)
 	var out []string
@@ -52,10 +70,11 @@ func (e *Engine) collectRoutes() []string {
 		seen[s] = true
 		out = append(out, s)
 	}
-	for _, p := range e.cfg.Queue.TUN.Routes {
+	cfg := e.config()
+	for _, p := range cfg.Queue.TUN.Routes {
 		add(p)
 	}
-	for _, set := range e.cfg.Sets {
+	for _, set := range cfg.Sets {
 		if set == nil || !set.Enabled {
 			continue
 		}
@@ -67,7 +86,8 @@ func (e *Engine) collectRoutes() []string {
 }
 
 func (e *Engine) Start() error {
-	tunCfg := &e.cfg.Queue.TUN
+	cfg := e.config()
+	tunCfg := &cfg.Queue.TUN
 	deviceName := tunCfg.DeviceName
 	if deviceName == "" {
 		deviceName = defaultDeviceName
@@ -97,7 +117,7 @@ func (e *Engine) Start() error {
 	e.tunName = name
 	log.Infof("TUN: opened device %s", name)
 
-	sender, err := sock.NewSenderWithMarkDevice(int(e.cfg.Queue.Mark), tunCfg.OutInterface)
+	sender, err := sock.NewSenderWithMarkDevice(int(cfg.Queue.Mark), tunCfg.OutInterface)
 	if err != nil {
 		e.tunFile.Close()
 		return err
@@ -117,7 +137,7 @@ func (e *Engine) Start() error {
 		tunAddrV6:  tunCfg.AddressV6,
 		outIface:   tunCfg.OutInterface,
 		outGateway: tunCfg.OutGateway,
-		mark:       e.cfg.Queue.Mark,
+		mark:       cfg.Queue.Mark,
 		routeTable: routeTable,
 		routes:     routes,
 	}
@@ -127,7 +147,7 @@ func (e *Engine) Start() error {
 		return err
 	}
 
-	threads := e.cfg.Queue.Threads
+	threads := cfg.Queue.Threads
 	if threads < 1 {
 		threads = 1
 	}

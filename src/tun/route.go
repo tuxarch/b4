@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 
 	"github.com/daniellavrushin/b4/log"
 )
@@ -20,10 +21,81 @@ type routeManager struct {
 	routes        []string
 	savedDefault  string
 	savedRPFilter string
+
+	mu      sync.Mutex
+	srcIP   string
+	current map[string]bool
 }
 
 func (r *routeManager) selective() bool {
 	return len(r.routes) > 0
+}
+
+func (r *routeManager) addRoute(prefix string) bool {
+	args := []string{"ip", "route", "add", prefix, "dev", r.tunName}
+	if r.srcIP != "" && strings.Count(prefix, ":") == 0 {
+		args = append(args, "src", r.srcIP)
+	}
+	if _, err := run(args...); err != nil {
+		log.Warnf("TUN: failed to add route %s: %v", prefix, err)
+		return false
+	}
+	return true
+}
+
+func (r *routeManager) Resync(desired []string) {
+	if !r.selective() {
+		return
+	}
+	want := make(map[string]bool, len(desired))
+	for _, p := range desired {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			want[p] = true
+		}
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	added, removed := 0, 0
+	for p := range want {
+		if !r.current[p] {
+			if r.addRoute(p) {
+				r.current[p] = true
+				added++
+			}
+		}
+	}
+	for p := range r.current {
+		if !want[p] {
+			run("ip", "route", "del", p, "dev", r.tunName)
+			delete(r.current, p)
+			removed++
+		}
+	}
+	if added > 0 || removed > 0 {
+		log.Infof("TUN: routes resynced (+%d -%d, now %d)", added, removed, len(r.current))
+	}
+}
+
+func (r *routeManager) Add(prefix string) {
+	if !r.selective() {
+		return
+	}
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.current[prefix] {
+		return
+	}
+	if r.addRoute(prefix) {
+		r.current[prefix] = true
+		log.Tracef("TUN: learned route %s -> %s", prefix, r.tunName)
+	}
 }
 
 func (r *routeManager) setup() error {
@@ -43,12 +115,12 @@ func (r *routeManager) setup() error {
 		}
 	}
 
-	// Source IP for router-originated traffic: without it the kernel picks the
-	// TUN address as source and replies can't get back. Use the uplink's IP.
 	srcIP := extractField(r.savedDefault, "src")
 	if srcIP == "" {
 		srcIP = interfacePrimaryIPv4(r.outIface)
 	}
+	r.srcIP = srcIP
+	r.current = make(map[string]bool)
 
 	if _, err := run("ip", "addr", "add", r.tunAddr, "dev", r.tunName); err != nil {
 		return fmt.Errorf("ip addr add: %w", err)
@@ -77,10 +149,6 @@ func rpFilterPath(iface string) string {
 	return "/proc/sys/net/ipv4/conf/" + iface + "/rp_filter"
 }
 
-// loosenRPFilter switches the uplink to loose reverse-path filtering. With
-// targets routed via the TUN, their replies arrive on the uplink whose reverse
-// route points at the TUN - strict rp_filter (1) silently drops them. Loose
-// mode (2) only requires the source be reachable via any interface.
 func (r *routeManager) loosenRPFilter() {
 	path := rpFilterPath(r.outIface)
 	cur, err := os.ReadFile(path)
@@ -109,15 +177,9 @@ func (r *routeManager) restoreRPFilter() {
 	}
 }
 
-// setupBypassTable installs the fwmark policy-routing table that carries b4's
-// own marked re-injected packets out the uplink. It contains only a default via
-// the uplink (no TUN routes), so re-injected packets reach the internet without
-// being pulled back into the TUN - in both selective and default-capture modes.
 func (r *routeManager) setupBypassTable() error {
 	tableStr := fmt.Sprintf("%d", r.routeTable)
 
-	// Refuse to clobber a table that is already in use (e.g. on ASUS Merlin
-	// table ids 100/200 are aliased to wan0/wan1 system tables).
 	if existing, _ := run("ip", "route", "show", "table", tableStr); strings.TrimSpace(existing) != "" {
 		return fmt.Errorf("route table %d is already in use (likely a system table; see /etc/iproute2/rt_tables) - set queue.tun.route_table to an unused id", r.routeTable)
 	}
@@ -131,8 +193,6 @@ func (r *routeManager) setupBypassTable() error {
 	return r.addBypassDefault(tableStr)
 }
 
-// setupSelective routes only the configured prefixes into the TUN, leaving the
-// system default route untouched.
 func (r *routeManager) setupSelective(srcIP string) error {
 	if err := r.setupBypassTable(); err != nil {
 		return err
@@ -144,15 +204,10 @@ func (r *routeManager) setupSelective(srcIP string) error {
 		if p == "" {
 			continue
 		}
-		args := []string{"ip", "route", "add", p, "dev", r.tunName}
-		if srcIP != "" && strings.Count(p, ":") == 0 {
-			args = append(args, "src", srcIP)
+		if r.addRoute(p) {
+			r.current[p] = true
+			added++
 		}
-		if _, err := run(args...); err != nil {
-			log.Warnf("TUN: failed to add selective route %s: %v", p, err)
-			continue
-		}
-		added++
 	}
 	if added == 0 {
 		return fmt.Errorf("selective routing: no routes could be added")
@@ -162,7 +217,6 @@ func (r *routeManager) setupSelective(srcIP string) error {
 	return nil
 }
 
-// setupDefaultCapture replaces the whole default route with the TUN.
 func (r *routeManager) setupDefaultCapture(srcIP string) error {
 	if err := r.setupBypassTable(); err != nil {
 		return err
@@ -182,7 +236,6 @@ func (r *routeManager) setupDefaultCapture(srcIP string) error {
 	return nil
 }
 
-// interfacePrimaryIPv4 returns the first global IPv4 address of iface, or "".
 func interfacePrimaryIPv4(iface string) string {
 	out, err := run("ip", "-4", "-o", "addr", "show", "dev", iface, "scope", "global")
 	if err != nil {
@@ -212,8 +265,6 @@ func (r *routeManager) teardown() {
 	markStr := fmt.Sprintf("0x%x", r.mark)
 	tableStr := fmt.Sprintf("%d", r.routeTable)
 
-	// Default-capture mode replaced the default route; selective mode never
-	// touched it (only the TUN's own host routes, which vanish with the device).
 	if !r.selective() && r.savedDefault != "" {
 		args := append([]string{"ip", "route", "replace"}, strings.Fields(r.savedDefault)...)
 		if _, err := run(args...); err != nil {

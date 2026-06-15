@@ -24,7 +24,6 @@ import (
 	"github.com/florianl/go-nfqueue"
 )
 
-// pktInfo holds parsed IP-layer information for a packet being processed.
 type pktInfo struct {
 	raw    []byte
 	ver    uint8
@@ -37,7 +36,6 @@ type pktInfo struct {
 	ihl    int
 }
 
-// handlePacket is the main NFQueue packet handler callback.
 func (w *Worker) handlePacket(q *nfqueue.Nfqueue, a nfqueue.Attribute, mark uint) int {
 	if a.PacketID == nil || a.Payload == nil || len(*a.Payload) == 0 {
 		if a.PacketID != nil && q != nil {
@@ -67,9 +65,6 @@ func (w *Worker) handlePacket(q *nfqueue.Nfqueue, a nfqueue.Attribute, mark uint
 	return w.dispatch(vc, *a.Payload)
 }
 
-// dispatch is the engine-agnostic packet processing core shared by the NFQUEUE
-// callback and the TUN read loop. It parses, matches and routes the packet to
-// the TCP/UDP handlers, which record their decision on vc.
 func (w *Worker) dispatch(vc *verdictCtx, raw []byte) int {
 	cfg := w.getConfig()
 	matcher := w.getMatcher()
@@ -88,11 +83,11 @@ func (w *Worker) dispatch(vc *verdictCtx, raw []byte) int {
 	}
 
 	switch pkt.proto {
-	case 6: // TCP
+	case 6:
 		if len(pkt.raw) >= pkt.ihl+TCPHeaderMinLen {
 			return w.handleTCPPacket(vc, pkt, cfg, matcher, matched, set, st)
 		}
-	case 17: // UDP
+	case 17:
 		if len(pkt.raw) >= pkt.ihl+UDPHeaderLen {
 			return w.handleUDPPacket(vc, pkt, cfg, matcher, matched, set, st)
 		}
@@ -125,8 +120,6 @@ func needsTCPSynInjection(set *config.SetConfig) bool {
 	return set.TCP.SynFake || (hasActiveStrategy && set.Faking.TCPMD5)
 }
 
-// parseIPHeaders parses IP version, protocol, addresses and header length.
-// Returns nil, false if the packet should be accepted without processing.
 func (w *Worker) parseIPHeaders(raw []byte) (*pktInfo, bool) {
 	v := raw[0] >> 4
 	if v != IPv4 && v != IPv6 {
@@ -194,7 +187,6 @@ func (w *Worker) parseIPHeaders(raw []byte) (*pktInfo, bool) {
 	return p, true
 }
 
-// handleTCPPacket processes TCP packets: matching, logging, metrics, and dispatch.
 func (w *Worker) handleTCPPacket(vc *verdictCtx, pkt *pktInfo, cfg *config.Config, matcher *sni.SuffixSet, matched bool, set *config.SetConfig, st *config.SetConfig) int {
 	tcp := pkt.raw[pkt.ihl:]
 	if len(tcp) < TCPHeaderMinLen {
@@ -212,7 +204,6 @@ func (w *Worker) handleTCPPacket(vc *verdictCtx, pkt *pktInfo, cfg *config.Confi
 		return w.HandleIncoming(vc, pkt.ver, pkt.raw, pkt.ihl, pkt.src, pkt.dstStr, dport, pkt.srcStr, sport, payload)
 	}
 
-	// If IP matched but set has a port filter, verify port matches (AND logic)
 	if matched && !set.MatchesTCPDPort(dport) {
 		matched = false
 		set = nil
@@ -328,7 +319,6 @@ func (w *Worker) handleTCPPacket(vc *verdictCtx, pkt *pktInfo, cfg *config.Confi
 	ipTarget := ""
 	sniTarget := ""
 
-	// Show port-matched set name in log
 	if !matchedIP && matched && set != nil {
 		ipTarget = set.Name
 	}
@@ -354,18 +344,17 @@ func (w *Worker) handleTCPPacket(vc *verdictCtx, pkt *pktInfo, cfg *config.Confi
 
 		if host != "" {
 			if mSNI, stSNI := matcher.MatchSNIWithSourceTLS(host, pkt.srcMac, tlsVersion, pkt.ver); mSNI {
-				// If SNI-matched set has a port filter, verify port matches (AND logic)
 				if stSNI.MatchesTCPDPort(dport) {
 					matchedSNI = true
 					matched = true
 					set = stSNI
 					matcher.LearnIPToDomain(pkt.dst, host, stSNI)
 					registerLearnedRoute(cfg, stSNI, pkt.dst)
+					registerTUNRoute(pkt.dst)
 				}
 			}
 		}
 
-		// If IP-matched set has a TLS version filter that doesn't match, clear it
 		if matched && !matchedSNI && set != nil && !set.MatchesTLSVersion(tlsVersion) {
 			matched = false
 			set = nil
@@ -577,7 +566,6 @@ func (w *Worker) handleTCPPacket(vc *verdictCtx, pkt *pktInfo, cfg *config.Confi
 	return vc.accept()
 }
 
-// handleUDPPacket processes UDP packets: DNS, QUIC, STUN filtering, and dispatch.
 func (w *Worker) handleUDPPacket(vc *verdictCtx, pkt *pktInfo, cfg *config.Config, matcher *sni.SuffixSet, matched bool, set *config.SetConfig, st *config.SetConfig) int {
 	udp := pkt.raw[pkt.ihl:]
 	if len(udp) < UDPHeaderLen {
@@ -605,7 +593,6 @@ func (w *Worker) handleUDPPacket(vc *verdictCtx, pkt *pktInfo, cfg *config.Confi
 	ipTarget := ""
 	sniTarget := ""
 
-	// If IP matched but set has a port filter, verify port matches (AND logic)
 	if matchedIP && !st.MatchesUDPDPort(dport) {
 		matchedIP = false
 		matched = false
@@ -630,7 +617,6 @@ func (w *Worker) handleUDPPacket(vc *verdictCtx, pkt *pktInfo, cfg *config.Confi
 		}
 	}
 
-	// If IP matching didn't find a set, try UDP port-based set matching
 	matchedPort := false
 	if !matched {
 		if portMatched, portSet := matcher.MatchUDPPort(dport); portMatched {
@@ -652,14 +638,14 @@ func (w *Worker) handleUDPPacket(vc *verdictCtx, pkt *pktInfo, cfg *config.Confi
 	}
 
 	if host != "" {
-		if mSNI, sniSet := matcher.MatchSNIWithSourceTLS(host, pkt.srcMac, 0x0304, pkt.ver); mSNI { // QUIC is always TLS 1.3
-			// If SNI-matched set has a port filter, verify port matches (AND logic)
+		if mSNI, sniSet := matcher.MatchSNIWithSourceTLS(host, pkt.srcMac, 0x0304, pkt.ver); mSNI {
 			if sniSet.MatchesUDPDPort(dport) {
 				matchedQUIC = true
 				set = sniSet
 				sniTarget = sniSet.Name
 				matcher.LearnIPToDomain(pkt.dst, host, sniSet)
 				registerLearnedRoute(cfg, sniSet, pkt.dst)
+				registerTUNRoute(pkt.dst)
 			}
 		}
 	}
@@ -680,7 +666,7 @@ func (w *Worker) handleUDPPacket(vc *verdictCtx, pkt *pktInfo, cfg *config.Confi
 
 	udpTLS := ""
 	if matchedQUIC || isQUIC {
-		udpTLS = "1.3" // QUIC is always TLS 1.3
+		udpTLS = "1.3"
 	}
 
 	if shouldHandle && set != nil && host != "" {
@@ -725,7 +711,6 @@ func (w *Worker) handleUDPPacket(vc *verdictCtx, pkt *pktInfo, cfg *config.Confi
 
 	if set.Routing.Enabled && config.RoutingIsBlock(set.Routing.Mode) {
 		if matchedQUIC || (matchedIP && !matchedLearned) {
-			// UDP has no RST; both reject actions map to an ICMP unreachable.
 			if config.NormalizeBlockAction(set.Routing.BlockAction) != config.BlockActionDrop {
 				if pkt.ver == IPv4 {
 					if icmp := sock.BuildICMPv4Reject(pkt.raw, pkt.src.To4(), pkt.dst.To4()); icmp != nil {
@@ -799,7 +784,6 @@ func (w *Worker) handleUDPPacket(vc *verdictCtx, pkt *pktInfo, cfg *config.Confi
 	}
 }
 
-// handleNfqError handles errors from the NFQueue subsystem.
 func (w *Worker) handleNfqError(e error) int {
 	if errors.Is(e, syscall.ENOBUFS) {
 		now := time.Now().Unix()
