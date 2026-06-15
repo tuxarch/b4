@@ -146,6 +146,7 @@ func (e *Engine) Start() error {
 		routes:     routes,
 	}
 	if err := e.routes.setup(); err != nil {
+		e.routes.teardown()
 		e.sender.Close()
 		e.tunFile.Close()
 		return err
