@@ -249,7 +249,6 @@ func (e *Engine) logForwardError(err error) {
 
 func (e *Engine) Stop() {
 	e.stopOnce.Do(func() {
-		nfq.TUNRouteFunc = nil
 		close(e.quit)
 
 		if e.tunFile != nil {
