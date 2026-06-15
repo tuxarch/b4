@@ -69,7 +69,9 @@ func ApplyMasqueradeOnly(cfg *config.Config) error {
 	loadKernelModules()
 	backend := detectFirewallBackend(cfg)
 	if backend == backendNFTables {
-		return NewNFTablesManager(cfg).ApplyMasquerade()
+		nft := NewNFTablesManager(cfg)
+		nft.ClearMasquerade()
+		return nft.ApplyMasquerade()
 	}
 	return NewIPTablesManager(cfg, backend == backendIPTablesLegacy).ApplyMasquerade()
 }
