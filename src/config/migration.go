@@ -68,6 +68,14 @@ var migrationRegistry = map[int]MigrationFunc{
 	44: migrateV44to45, // Add per-set DNS-over-HTTPS redirect target
 	45: migrateV45to46, // Replace logging.error_file with logging.directory
 	46: migrateV46to47, // Drop the hardcoded legacy MTProto WS endpoint host (empty now falls back to it)
+	47: migrateV47to48, // Add TUN engine mode and config
+}
+
+func migrateV47to48(c *Config, _ map[string]interface{}) error {
+	log.Tracef("Migration v47->v48: Adding TUN engine mode and config")
+	c.Queue.Mode = DefaultConfig.Queue.Mode
+	c.Queue.TUN = DefaultConfig.Queue.TUN
+	return nil
 }
 
 func migrateV46to47(c *Config, _ map[string]interface{}) error {
