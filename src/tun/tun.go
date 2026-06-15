@@ -31,6 +31,7 @@ type Engine struct {
 	sender        *sock.Sender
 	wg            sync.WaitGroup
 	quit          chan struct{}
+	stopOnce      sync.Once
 	fwdCount      uint64
 	fwdErrCount   uint64
 	lastFwdErrLog int64
@@ -240,22 +241,24 @@ func (e *Engine) logForwardError(err error) {
 }
 
 func (e *Engine) Stop() {
-	nfq.TUNRouteFunc = nil
-	close(e.quit)
+	e.stopOnce.Do(func() {
+		nfq.TUNRouteFunc = nil
+		close(e.quit)
 
-	if e.tunFile != nil {
-		e.tunFile.Close()
-	}
+		if e.tunFile != nil {
+			e.tunFile.Close()
+		}
 
-	e.wg.Wait()
+		e.wg.Wait()
 
-	if e.routes != nil {
-		e.routes.teardown()
-	}
-	if e.sender != nil {
-		e.sender.Close()
-	}
+		if e.routes != nil {
+			e.routes.teardown()
+		}
+		if e.sender != nil {
+			e.sender.Close()
+		}
 
-	log.Infof("TUN: engine stopped (%d packets forwarded, %d forward errors)",
-		atomic.LoadUint64(&e.fwdCount), atomic.LoadUint64(&e.fwdErrCount))
+		log.Infof("TUN: engine stopped (%d packets forwarded, %d forward errors)",
+			atomic.LoadUint64(&e.fwdCount), atomic.LoadUint64(&e.fwdErrCount))
+	})
 }
