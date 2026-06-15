@@ -19,10 +19,6 @@ func NewSenderWithMark(mark int) (*Sender, error) {
 	return NewSenderWithMarkDevice(mark, "")
 }
 
-// NewSenderWithMarkDevice creates a raw-socket sender. When device is non-empty
-// the sockets are bound to that interface (SO_BINDTODEVICE), forcing all egress
-// out of it. In TUN mode this guarantees b4's own re-injected packets leave via
-// the real uplink and can never be routed back into the TUN device (loop guard).
 func NewSenderWithMarkDevice(mark int, device string) (*Sender, error) {
 	s := &Sender{
 		fd4:  -1,

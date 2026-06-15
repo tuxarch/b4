@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/daniellavrushin/b4/config"
 	"github.com/daniellavrushin/b4/engine"
@@ -22,14 +23,17 @@ const (
 )
 
 type Engine struct {
-	cfg     atomic.Pointer[config.Config]
-	pool    *nfq.Pool
-	tunFile *os.File
-	tunName string
-	routes  *routeManager
-	sender  *sock.Sender
-	wg      sync.WaitGroup
-	quit    chan struct{}
+	cfg           atomic.Pointer[config.Config]
+	pool          *nfq.Pool
+	tunFile       *os.File
+	tunName       string
+	routes        *routeManager
+	sender        *sock.Sender
+	wg            sync.WaitGroup
+	quit          chan struct{}
+	fwdCount      uint64
+	fwdErrCount   uint64
+	lastFwdErrLog int64
 }
 
 func NewEngine(cfg *config.Config, pool *nfq.Pool) *Engine {
@@ -181,6 +185,7 @@ func (e *Engine) readLoop(workerIdx int) {
 			default:
 			}
 			log.Errorf("TUN: read error: %v", err)
+			time.Sleep(10 * time.Millisecond)
 			continue
 		}
 		if n == 0 {
@@ -200,21 +205,40 @@ func (e *Engine) forwardPacket(raw []byte) {
 	if len(raw) == 0 {
 		return
 	}
+	var err error
 	switch raw[0] >> 4 {
 	case 4:
 		if len(raw) < 20 {
 			return
 		}
-		_ = e.sender.SendIPv4(raw, raw[16:20])
+		err = e.sender.SendIPv4(raw, raw[16:20])
 	case 6:
 		if len(raw) < 40 {
 			return
 		}
-		_ = e.sender.SendIPv6(raw, raw[24:40])
+		err = e.sender.SendIPv6(raw, raw[24:40])
+	default:
+		return
+	}
+	if err != nil {
+		e.logForwardError(err)
+		return
+	}
+	atomic.AddUint64(&e.fwdCount, 1)
+}
+
+func (e *Engine) logForwardError(err error) {
+	n := atomic.AddUint64(&e.fwdErrCount, 1)
+	now := time.Now().Unix()
+	last := atomic.LoadInt64(&e.lastFwdErrLog)
+	if now-last >= 5 && atomic.CompareAndSwapInt64(&e.lastFwdErrLog, last, now) {
+		log.Warnf("TUN: failed to forward packet out %s (%d errors, %d ok): %v",
+			e.config().Queue.TUN.OutInterface, n, atomic.LoadUint64(&e.fwdCount), err)
 	}
 }
 
 func (e *Engine) Stop() {
+	nfq.TUNRouteFunc = nil
 	close(e.quit)
 
 	if e.tunFile != nil {
@@ -230,5 +254,6 @@ func (e *Engine) Stop() {
 		e.sender.Close()
 	}
 
-	log.Infof("TUN: engine stopped")
+	log.Infof("TUN: engine stopped (%d packets forwarded, %d forward errors)",
+		atomic.LoadUint64(&e.fwdCount), atomic.LoadUint64(&e.fwdErrCount))
 }

@@ -62,9 +62,6 @@ func DetectBackend(cfg *config.Config) string {
 	return detectFirewallBackend(cfg)
 }
 
-// ApplyMasqueradeOnly installs only the NAT masquerade rule, without the
-// NFQUEUE/packet-steering rules. Used by TUN mode, where b4 ingests packets
-// from a TUN device but still relies on the kernel to NAT forwarded traffic.
 func ApplyMasqueradeOnly(cfg *config.Config) error {
 	if !cfg.System.Tables.Masquerade {
 		return nil
