@@ -248,7 +248,9 @@ func runB4(cmd *cobra.Command, args []string) error {
 		}
 
 		tunEngine = b4tun.NewEngine(&cfg, pool)
+		nfq.TUNRouteFunc = tunEngine.AddRoute
 		if err := tunEngine.Start(); err != nil {
+			nfq.TUNRouteFunc = nil
 			if !cfg.System.Tables.SkipSetup {
 				tables.ClearMasqueradeOnly(&cfg)
 			}
@@ -256,7 +258,6 @@ func runB4(cmd *cobra.Command, args []string) error {
 			metrics.NFQueueStatus = "error"
 			return fmt.Errorf("TUN engine start failed: %w", err)
 		}
-		nfq.TUNRouteFunc = tunEngine.AddRoute
 
 		if cfg.System.Tables.SkipSetup {
 			metrics.TablesStatus = "tun (skip-tables)"
