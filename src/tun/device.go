@@ -10,10 +10,10 @@ import (
 
 const (
 	tunDevice = "/dev/net/tun"
-	ifnamsiz  = 16
-	iffTun    = 0x0001
-	iffNoPi   = 0x1000
-	tunsetiff = 0x400454ca
+	ifnamsiz  = unix.IFNAMSIZ
+	iffTun    = unix.IFF_TUN
+	iffNoPi   = unix.IFF_NO_PI
+	tunsetiff = unix.TUNSETIFF
 )
 
 type ifreqFlags struct {
