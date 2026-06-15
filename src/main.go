@@ -238,21 +238,31 @@ func runB4(cmd *cobra.Command, args []string) error {
 		log.Infof("Starting TUN engine (device: %s, out: %s, threads: %d)",
 			cfg.Queue.TUN.DeviceName, cfg.Queue.TUN.OutInterface, cfg.Queue.Threads)
 
-		if err := tables.ApplyMasqueradeOnly(&cfg); err != nil {
-			metrics.RecordEvent("error", fmt.Sprintf("Failed to apply masquerade: %v", err))
-			return fmt.Errorf("failed to apply masquerade: %w", err)
+		if !cfg.System.Tables.SkipSetup {
+			if err := tables.ApplyMasqueradeOnly(&cfg); err != nil {
+				metrics.RecordEvent("error", fmt.Sprintf("Failed to apply masquerade: %v", err))
+				return fmt.Errorf("failed to apply masquerade: %w", err)
+			}
+		} else {
+			log.Infof("Skipping masquerade setup (--skip-tables)")
 		}
 
 		tunEngine = b4tun.NewEngine(&cfg, pool)
 		if err := tunEngine.Start(); err != nil {
-			tables.ClearMasqueradeOnly(&cfg)
+			if !cfg.System.Tables.SkipSetup {
+				tables.ClearMasqueradeOnly(&cfg)
+			}
 			metrics.RecordEvent("error", fmt.Sprintf("TUN engine start failed: %v", err))
 			metrics.NFQueueStatus = "error"
 			return fmt.Errorf("TUN engine start failed: %w", err)
 		}
 		nfq.TUNRouteFunc = tunEngine.AddRoute
 
-		metrics.TablesStatus = "tun"
+		if cfg.System.Tables.SkipSetup {
+			metrics.TablesStatus = "tun (skip-tables)"
+		} else {
+			metrics.TablesStatus = "tun"
+		}
 		metrics.NFQueueStatus = "active (tun)"
 		metrics.RecordEvent("info", fmt.Sprintf("TUN engine started with %d threads", cfg.Queue.Threads))
 	} else {
@@ -491,7 +501,9 @@ func gracefulShutdown(cfg *config.Config, pool *nfq.Pool, tunEngine *b4tun.Engin
 
 	// Clean up iptables/nftables rules
 	if tunEngine != nil {
-		tables.ClearMasqueradeOnly(cfg)
+		if !cfg.System.Tables.SkipSetup {
+			tables.ClearMasqueradeOnly(cfg)
+		}
 		metrics.TablesStatus = "inactive"
 	} else if !cfg.System.Tables.SkipSetup {
 		wg.Add(1)
