@@ -78,6 +78,7 @@ func NewPool(cfg *config.Config) *Pool {
 				pool.state.connState.Cleanup()
 				pool.state.tlsCache.Cleanup()
 				pool.state.destState.Cleanup(300 * time.Second)
+				_ = cleanupDNSPendingRoutes(time.Now())
 			case <-escalationTicker.C:
 				metrics.GetMetricsCollector().UpdateEscalations(pool.GetEscalations())
 			case <-pool.stopCleanup:

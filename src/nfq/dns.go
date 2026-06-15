@@ -13,7 +13,6 @@ import (
 	"github.com/daniellavrushin/b4/log"
 	"github.com/daniellavrushin/b4/metrics"
 	"github.com/daniellavrushin/b4/sock"
-	"github.com/florianl/go-nfqueue"
 )
 
 const dohRedirectTimeout = 5 * time.Second
@@ -80,7 +79,7 @@ func parseDNSName(msg []byte, offset int) (string, bool) {
 	return strings.Join(labels, "."), true
 }
 
-func (w *Worker) processDnsPacket(ipVersion byte, sport uint16, dport uint16, payload []byte, raw []byte, id uint32, srcMac string) int {
+func (w *Worker) processDnsPacket(vc *verdictCtx, ipVersion byte, sport uint16, dport uint16, payload []byte, raw []byte, srcMac string) int {
 
 	if dport == 53 {
 		domain, ok := dns.ParseQueryDomain(payload)
@@ -95,9 +94,7 @@ func (w *Worker) processDnsPacket(ipVersion byte, sport uint16, dport uint16, pa
 				if set.Routing.Enabled && config.RoutingIsBlock(set.Routing.Mode) && !cfg.Queue.IsDiscovery {
 					if config.NormalizeBlockAction(set.Routing.BlockAction) == config.BlockActionDrop {
 						metrics.GetMetricsCollector().RecordBlock(domain, srcMac)
-						if err := w.q.SetVerdict(id, nfqueue.NfDrop); err != nil {
-							log.Tracef("failed to set drop verdict on packet %d: %v", id, err)
-						}
+						vc.drop()
 						return 0
 					}
 					ipv6Disabled := ipVersion == IPv6 && !cfg.Queue.IPv6Enabled
@@ -121,9 +118,7 @@ func (w *Worker) processDnsPacket(ipVersion byte, sport uint16, dport uint16, pa
 							}
 							log.Tracef("DNS sinkhole: %s -> NXDOMAIN for %s (set: %s)", domain, clientIP, set.Name)
 							metrics.GetMetricsCollector().RecordBlock(domain, srcMac)
-							if err := w.q.SetVerdict(id, nfqueue.NfDrop); err != nil {
-								log.Tracef("failed to set drop verdict on packet %d: %v", id, err)
-							}
+							vc.drop()
 							return 0
 						}
 					}
@@ -151,28 +146,19 @@ func (w *Worker) processDnsPacket(ipVersion byte, sport uint16, dport uint16, pa
 
 				if !(set.DNS.Enabled && (set.DNS.TargetDNS != "" || useDoH)) {
 					log.Tracef("DNS redirect: %s matched set %s but no redirect target configured, passing through", domain, set.Name)
-					if err := w.q.SetVerdict(id, nfqueue.NfAccept); err != nil {
-						log.Tracef("failed to set verdict on packet %d: %v", id, err)
-					}
-					return 0
+					return vc.accept()
 				}
 
 				var targetIP net.IP
 				if !useDoH {
 					targetIP = net.ParseIP(set.DNS.TargetDNS)
 					if targetIP == nil {
-						if err := w.q.SetVerdict(id, nfqueue.NfAccept); err != nil {
-							log.Tracef("failed to set verdict on packet %d: %v", id, err)
-						}
-						return 0
+						return vc.accept()
 					}
 				}
 
 				if ipVersion == IPv6 && !cfg.Queue.IPv6Enabled {
-					if err := w.q.SetVerdict(id, nfqueue.NfAccept); err != nil {
-						log.Tracef("failed to set verdict on packet %d: %v", id, err)
-					}
-					return 0
+					return vc.accept()
 				}
 
 				var clientIP, originalDst net.IP
@@ -196,9 +182,7 @@ func (w *Worker) processDnsPacket(ipVersion byte, sport uint16, dport uint16, pa
 				}
 				log.Tracef("DNS redirect: intercepting %s -> %s (set %s)", domain, target, set.Name)
 
-				if err := w.q.SetVerdict(id, nfqueue.NfDrop); err != nil {
-					log.Tracef("failed to set drop verdict on packet %d: %v", id, err)
-				}
+				vc.drop()
 
 				w.wg.Add(1)
 				go func(s *config.SetConfig, c *config.Config) {
@@ -244,10 +228,7 @@ func (w *Worker) processDnsPacket(ipVersion byte, sport uint16, dport uint16, pa
 		}
 	}
 
-	if err := w.q.SetVerdict(id, nfqueue.NfAccept); err != nil {
-		log.Tracef("failed to set verdict on packet %d: %v", id, err)
-	}
-	return 0
+	return vc.accept()
 }
 
 func (w *Worker) resolveDNSRedirect(ipVersion byte, set *config.SetConfig, cfg *config.Config, query []byte, clientIP net.IP, clientPort uint16, originalDst, targetIP net.IP, delay int) {

@@ -26,6 +26,51 @@ func NewIPTablesManager(cfg *config.Config, useLegacy bool) *IPTablesManager {
 	return &IPTablesManager{cfg: cfg, useLegacy: useLegacy, multiportSupport: make(map[string]bool), connbytesSupport: make(map[string]error)}
 }
 
+func (im *IPTablesManager) ApplyMasquerade() error {
+	if !im.cfg.System.Tables.Masquerade {
+		return nil
+	}
+
+	iptBin := im.iptablesBin()
+	masqSpec := []string{"-j", "MASQUERADE"}
+	if iface := im.cfg.System.Tables.MasqueradeInterface; iface != "" {
+		masqSpec = []string{"-o", iface, "-j", "MASQUERADE"}
+	}
+
+	checkArgs := append([]string{iptBin, "-w", "-t", "nat", "-C", "POSTROUTING"}, masqSpec...)
+	if _, err := run(checkArgs...); err == nil {
+		return nil
+	}
+
+	addArgs := append([]string{iptBin, "-w", "-t", "nat", "-A", "POSTROUTING"}, masqSpec...)
+	if _, err := run(addArgs...); err != nil {
+		return fmt.Errorf("failed to add masquerade rule: %w", err)
+	}
+
+	iface := im.cfg.System.Tables.MasqueradeInterface
+	if iface == "" {
+		iface = "all"
+	}
+	log.Infof("IPTABLES: masquerade enabled (interface: %s)", iface)
+	return nil
+}
+
+func (im *IPTablesManager) ClearMasquerade() {
+	iptBin := im.iptablesBin()
+	for {
+		if _, err := run(iptBin, "-w", "-t", "nat", "-D", "POSTROUTING", "-j", "MASQUERADE"); err != nil {
+			break
+		}
+	}
+	if iface := im.cfg.System.Tables.MasqueradeInterface; iface != "" {
+		for {
+			if _, err := run(iptBin, "-w", "-t", "nat", "-D", "POSTROUTING", "-o", iface, "-j", "MASQUERADE"); err != nil {
+				break
+			}
+		}
+	}
+}
+
 func (im *IPTablesManager) iptablesBin() string {
 	if im.useLegacy {
 		return backendIPTablesLegacy

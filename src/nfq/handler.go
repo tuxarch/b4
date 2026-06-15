@@ -37,19 +37,8 @@ type pktInfo struct {
 	ihl    int
 }
 
-// accept sets an NfAccept verdict on a packet.
-func accept(q *nfqueue.Nfqueue, id uint32) int {
-	if err := q.SetVerdict(id, nfqueue.NfAccept); err != nil {
-		log.Tracef("failed to set verdict on packet %d: %v", id, err)
-	}
-	return 0
-}
-
 // handlePacket is the main NFQueue packet handler callback.
 func (w *Worker) handlePacket(q *nfqueue.Nfqueue, a nfqueue.Attribute, mark uint) int {
-	cfg := w.getConfig()
-	matcher := w.getMatcher()
-
 	if a.PacketID == nil || a.Payload == nil || len(*a.Payload) == 0 {
 		if a.PacketID != nil && q != nil {
 			if err := q.SetVerdict(*a.PacketID, nfqueue.NfAccept); err != nil {
@@ -59,14 +48,14 @@ func (w *Worker) handlePacket(q *nfqueue.Nfqueue, a nfqueue.Attribute, mark uint
 		return 0
 	}
 
-	id := *a.PacketID
+	vc := &verdictCtx{id: *a.PacketID, q: q}
 
 	if a.Mark != nil && *a.Mark == uint32(mark) {
-		return accept(q, id)
+		return vc.accept()
 	}
 
 	if !w.matchesInterface(a) {
-		return accept(q, id)
+		return vc.accept()
 	}
 
 	select {
@@ -75,11 +64,21 @@ func (w *Worker) handlePacket(q *nfqueue.Nfqueue, a nfqueue.Attribute, mark uint
 	default:
 	}
 
+	return w.dispatch(vc, *a.Payload)
+}
+
+// dispatch is the engine-agnostic packet processing core shared by the NFQUEUE
+// callback and the TUN read loop. It parses, matches and routes the packet to
+// the TCP/UDP handlers, which record their decision on vc.
+func (w *Worker) dispatch(vc *verdictCtx, raw []byte) int {
+	cfg := w.getConfig()
+	matcher := w.getMatcher()
+
 	atomic.AddUint64(&w.packetsProcessed, 1)
 
-	pkt, ok := w.parseIPHeaders(*a.Payload)
+	pkt, ok := w.parseIPHeaders(raw)
 	if !ok {
-		return accept(q, id)
+		return vc.accept()
 	}
 
 	matched, st := matcher.MatchIPWithSource(pkt.dst, pkt.srcMac)
@@ -91,15 +90,15 @@ func (w *Worker) handlePacket(q *nfqueue.Nfqueue, a nfqueue.Attribute, mark uint
 	switch pkt.proto {
 	case 6: // TCP
 		if len(pkt.raw) >= pkt.ihl+TCPHeaderMinLen {
-			return w.handleTCPPacket(q, id, pkt, cfg, matcher, matched, set, st)
+			return w.handleTCPPacket(vc, pkt, cfg, matcher, matched, set, st)
 		}
 	case 17: // UDP
 		if len(pkt.raw) >= pkt.ihl+UDPHeaderLen {
-			return w.handleUDPPacket(q, id, pkt, cfg, matcher, matched, set, st)
+			return w.handleUDPPacket(vc, pkt, cfg, matcher, matched, set, st)
 		}
 	}
 
-	return accept(q, id)
+	return vc.accept()
 }
 
 func needsTCPInjection(set *config.SetConfig) bool {
@@ -196,21 +195,21 @@ func (w *Worker) parseIPHeaders(raw []byte) (*pktInfo, bool) {
 }
 
 // handleTCPPacket processes TCP packets: matching, logging, metrics, and dispatch.
-func (w *Worker) handleTCPPacket(q *nfqueue.Nfqueue, id uint32, pkt *pktInfo, cfg *config.Config, matcher *sni.SuffixSet, matched bool, set *config.SetConfig, st *config.SetConfig) int {
+func (w *Worker) handleTCPPacket(vc *verdictCtx, pkt *pktInfo, cfg *config.Config, matcher *sni.SuffixSet, matched bool, set *config.SetConfig, st *config.SetConfig) int {
 	tcp := pkt.raw[pkt.ihl:]
 	if len(tcp) < TCPHeaderMinLen {
-		return accept(q, id)
+		return vc.accept()
 	}
 	datOff := int((tcp[12]>>4)&0x0f) * 4
 	if len(tcp) < datOff {
-		return accept(q, id)
+		return vc.accept()
 	}
 	payload := tcp[datOff:]
 	sport := binary.BigEndian.Uint16(tcp[0:2])
 	dport := binary.BigEndian.Uint16(tcp[2:4])
 
 	if cfg.IsTCPPort(sport) {
-		return w.HandleIncoming(q, id, pkt.ver, pkt.raw, pkt.ihl, pkt.src, pkt.dstStr, dport, pkt.srcStr, sport, payload)
+		return w.HandleIncoming(vc, pkt.ver, pkt.raw, pkt.ihl, pkt.src, pkt.dstStr, dport, pkt.srcStr, sport, payload)
 	}
 
 	// If IP matched but set has a port filter, verify port matches (AND logic)
@@ -252,8 +251,7 @@ func (w *Worker) handleTCPPacket(q *nfqueue.Nfqueue, id uint32, pkt *pktInfo, cf
 			log.LogConnection("TCP", "", dupHost, pkt.srcStr, sport, set.Name, pkt.dstStr, dport, pkt.srcMac, config.TLSVersionString(dupTLS), "tcp-dup")
 		}
 
-		if err := q.SetVerdict(id, nfqueue.NfDrop); err != nil {
-			log.Tracef("failed to set drop verdict on packet %d: %v", id, err)
+		if !vc.drop() {
 			return 0
 		}
 
@@ -278,9 +276,7 @@ func (w *Worker) handleTCPPacket(q *nfqueue.Nfqueue, id uint32, pkt *pktInfo, cf
 			if w.connTracker.ShouldDropOutboundRST(connKey) {
 				log.Warnf("RST protection: dropped outbound RST to %s:%d — connection not established", pkt.dstStr, dport)
 				metrics.GetMetricsCollector().RecordRSTDrop()
-				if err := q.SetVerdict(id, nfqueue.NfDrop); err != nil {
-					log.Tracef("failed to drop outbound RST packet %d: %v", id, err)
-				}
+				vc.drop()
 				return 0
 			}
 		}
@@ -320,9 +316,7 @@ func (w *Worker) handleTCPPacket(q *nfqueue.Nfqueue, id uint32, pkt *pktInfo, cf
 			w.connTracker.RegisterOutgoing(connKey, set)
 		}
 
-		if err := q.SetVerdict(id, nfqueue.NfDrop); err != nil {
-			log.Tracef("failed to set drop verdict on packet %d: %v", id, err)
-		}
+		vc.drop()
 		return 0
 	}
 
@@ -436,9 +430,7 @@ func (w *Worker) handleTCPPacket(q *nfqueue.Nfqueue, id uint32, pkt *pktInfo, cf
 			m := metrics.GetMetricsCollector()
 			m.RecordConnection("TCP", host, pkt.srcStr, pkt.dstStr, true, pkt.srcMac, set.Name, config.TLSVersionString(tlsVersion))
 			m.RecordPacket(uint64(len(pkt.raw)))
-			if err := q.SetVerdict(id, nfqueue.NfDrop); err != nil {
-				log.Tracef("failed to set drop verdict on packet %d: %v", id, err)
-			}
+			vc.drop()
 			return 0
 		}
 	}
@@ -474,16 +466,14 @@ func (w *Worker) handleTCPPacket(q *nfqueue.Nfqueue, id uint32, pkt *pktInfo, cf
 				}
 				metrics.GetMetricsCollector().RecordBlock(blockedTarget, pkt.srcMac)
 			}
-			if err := q.SetVerdict(id, nfqueue.NfDrop); err != nil {
-				log.Tracef("failed to set drop verdict on packet %d: %v", id, err)
-			}
+			vc.drop()
 			return 0
 		}
-		return accept(q, id)
+		return vc.accept()
 	}
 
 	if matched && set != nil && set.Routing.Enabled && config.RoutingUsesTProxy(set.Routing.Mode) {
-		return accept(q, id)
+		return vc.accept()
 	}
 
 	if matched {
@@ -514,9 +504,7 @@ func (w *Worker) handleTCPPacket(q *nfqueue.Nfqueue, id uint32, pkt *pktInfo, cf
 							if !cfg.Queue.IsDiscovery {
 								log.LogConnection("TCP", sniTarget, host, pkt.srcStr, sport, ipTarget, pkt.dstStr, dport, pkt.srcMac, config.TLSVersionString(tlsVersion), "ipblock-escalate->"+next.Name)
 							}
-							if err := q.SetVerdict(id, nfqueue.NfDrop); err != nil {
-								log.Tracef("failed to set drop verdict on packet %d: %v", id, err)
-							}
+							vc.drop()
 							return 0
 						}
 						log.Warnf("escalation hop cap reached for %s (chain stopped at %s)", host, set.Name)
@@ -539,9 +527,7 @@ func (w *Worker) handleTCPPacket(q *nfqueue.Nfqueue, id uint32, pkt *pktInfo, cf
 						m := metrics.GetMetricsCollector()
 						m.RecordConnection("TCP", host, pkt.srcStr, pkt.dstStr, true, pkt.srcMac, set.Name, config.TLSVersionString(tlsVersion))
 					}
-					if err := q.SetVerdict(id, nfqueue.NfDrop); err != nil {
-						log.Tracef("failed to set drop verdict on packet %d: %v", id, err)
-					}
+					vc.drop()
 					return 0
 				}
 			}
@@ -553,7 +539,7 @@ func (w *Worker) handleTCPPacket(q *nfqueue.Nfqueue, id uint32, pkt *pktInfo, cf
 		}
 
 		if routeTProxy || !needsTCPInjection(set) {
-			return accept(q, id)
+			return vc.accept()
 		}
 
 		packetCopy := make([]byte, len(pkt.raw))
@@ -571,8 +557,7 @@ func (w *Worker) handleTCPPacket(q *nfqueue.Nfqueue, id uint32, pkt *pktInfo, cf
 		copy(dstCopy, pkt.dst)
 		setCopy := set
 
-		if err := q.SetVerdict(id, nfqueue.NfDrop); err != nil {
-			log.Tracef("failed to set drop verdict on packet %d: %v", id, err)
+		if !vc.drop() {
 			return 0
 		}
 
@@ -589,14 +574,14 @@ func (w *Worker) handleTCPPacket(q *nfqueue.Nfqueue, id uint32, pkt *pktInfo, cf
 		return 0
 	}
 
-	return accept(q, id)
+	return vc.accept()
 }
 
 // handleUDPPacket processes UDP packets: DNS, QUIC, STUN filtering, and dispatch.
-func (w *Worker) handleUDPPacket(q *nfqueue.Nfqueue, id uint32, pkt *pktInfo, cfg *config.Config, matcher *sni.SuffixSet, matched bool, set *config.SetConfig, st *config.SetConfig) int {
+func (w *Worker) handleUDPPacket(vc *verdictCtx, pkt *pktInfo, cfg *config.Config, matcher *sni.SuffixSet, matched bool, set *config.SetConfig, st *config.SetConfig) int {
 	udp := pkt.raw[pkt.ihl:]
 	if len(udp) < UDPHeaderLen {
-		return accept(q, id)
+		return vc.accept()
 	}
 
 	payload := udp[8:]
@@ -605,11 +590,11 @@ func (w *Worker) handleUDPPacket(q *nfqueue.Nfqueue, id uint32, pkt *pktInfo, cf
 	connKey := fmt.Sprintf(connKeyFormat, pkt.srcStr, sport, pkt.dstStr, dport)
 
 	if sport == 53 || dport == 53 {
-		return w.processDnsPacket(pkt.ver, sport, dport, payload, pkt.raw, id, pkt.srcMac)
+		return w.processDnsPacket(vc, pkt.ver, sport, dport, payload, pkt.raw, pkt.srcMac)
 	}
 
 	if utils.IsPrivateIP(pkt.dst) {
-		return accept(q, id)
+		return vc.accept()
 	}
 
 	matchedIP := st != nil
@@ -720,14 +705,14 @@ func (w *Worker) handleUDPPacket(q *nfqueue.Nfqueue, id uint32, pkt *pktInfo, cf
 	}
 
 	if isVoiceMedia && set != nil && set.UDP.FilterSTUN {
-		return accept(q, id)
+		return vc.accept()
 	}
 
 	if !shouldHandle {
 		m := metrics.GetMetricsCollector()
 		m.RecordConnection("UDP", host, pkt.srcStr, pkt.dstStr, false, pkt.srcMac, "", udpTLS)
 		m.RecordPacket(uint64(len(pkt.raw)))
-		return accept(q, id)
+		return vc.accept()
 	}
 
 	m := metrics.GetMetricsCollector()
@@ -760,24 +745,19 @@ func (w *Worker) handleUDPPacket(q *nfqueue.Nfqueue, id uint32, pkt *pktInfo, cf
 				}
 				metrics.GetMetricsCollector().RecordBlock(blockedTarget, pkt.srcMac)
 			}
-			if err := q.SetVerdict(id, nfqueue.NfDrop); err != nil {
-				log.Tracef("failed to set drop verdict on packet %d: %v", id, err)
-			}
+			vc.drop()
 			return 0
 		}
-		return accept(q, id)
+		return vc.accept()
 	}
 
 	switch set.UDP.Mode {
 	case "drop":
-		if err := q.SetVerdict(id, nfqueue.NfDrop); err != nil {
-			log.Tracef("failed to set drop verdict on packet %d: %v", id, err)
-		}
+		vc.drop()
 		return 0
 
 	case "reject":
-		if err := q.SetVerdict(id, nfqueue.NfDrop); err != nil {
-			log.Tracef("failed to set drop verdict on packet %d: %v", id, err)
+		if !vc.drop() {
 			return 0
 		}
 		if pkt.ver == IPv4 {
@@ -798,8 +778,7 @@ func (w *Worker) handleUDPPacket(q *nfqueue.Nfqueue, id uint32, pkt *pktInfo, cf
 		copy(dstCopy, pkt.dst)
 		setCopy := set
 
-		if err := q.SetVerdict(id, nfqueue.NfDrop); err != nil {
-			log.Tracef("failed to set drop verdict on UDP packet %d: %v", id, err)
+		if !vc.drop() {
 			return 0
 		}
 
@@ -816,7 +795,7 @@ func (w *Worker) handleUDPPacket(q *nfqueue.Nfqueue, id uint32, pkt *pktInfo, cf
 		return 0
 
 	default:
-		return accept(q, id)
+		return vc.accept()
 	}
 }
 
