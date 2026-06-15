@@ -1,5 +1,9 @@
 # B4 - Bye Bye Big Bro
 
+## [1.70.0] - 2026-06-xx
+
+- ADDED: **TUN-interface packet engine for devices without NFQUEUE** - b4 normally receives the packets it processes through the router's firewall (iptables/nftables), which needs kernel modules that some minimal or stripped-down devices lack, so b4 could not run on them at all. A new engine mode under Settings → Feature Flags lets b4 take traffic through a virtual network interface (a TUN device) instead. Choose the uplink b4 sends through (for example `eth0`, `wan0`, or an L2TP/PPP tunnel); by default only the addresses of your enabled sets pass through the virtual interface, leaving the rest of the traffic on its normal path. Covers IPv4 for now. The default NFQUEUE engine is unchanged, so existing setups are unaffected.
+
 ## [1.69.1] - 2026-06-14
 
 - FIXED: **Sets manager felt frozen after enabling, reordering, duplicating, or deleting a set** - the screen only changed once the action had been saved and the whole configuration re-fetched a second or two later, so a click looked like nothing had happened, a dragged set snapped back to its old place before jumping to the new one, and a duplicate appeared out of nowhere after a pause.
