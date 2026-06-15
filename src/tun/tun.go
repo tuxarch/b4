@@ -2,6 +2,7 @@ package tun
 
 import (
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/daniellavrushin/b4/config"
@@ -35,6 +36,34 @@ func NewEngine(cfg *config.Config, pool *nfq.Pool) *Engine {
 		pool: pool,
 		quit: make(chan struct{}),
 	}
+}
+
+// collectRoutes merges explicit tun.routes with the resolved IPs/CIDRs of every
+// enabled set. A non-empty result puts the engine in selective mode (only these
+// prefixes enter the TUN); empty falls back to whole-default capture.
+func (e *Engine) collectRoutes() []string {
+	seen := make(map[string]bool)
+	var out []string
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" || seen[s] {
+			return
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	for _, p := range e.cfg.Queue.TUN.Routes {
+		add(p)
+	}
+	for _, set := range e.cfg.Sets {
+		if set == nil || !set.Enabled {
+			continue
+		}
+		for _, ip := range set.Targets.IpsToMatch {
+			add(ip)
+		}
+	}
+	return out
 }
 
 func (e *Engine) Start() error {
@@ -75,6 +104,13 @@ func (e *Engine) Start() error {
 	}
 	e.sender = sender
 
+	routes := e.collectRoutes()
+	if len(routes) > 0 {
+		log.Infof("TUN: selective mode - %d target prefixes from config+sets", len(routes))
+	} else {
+		log.Infof("TUN: no target prefixes - capturing the whole default route")
+	}
+
 	e.routes = &routeManager{
 		tunName:    name,
 		tunAddr:    address,
@@ -83,7 +119,7 @@ func (e *Engine) Start() error {
 		outGateway: tunCfg.OutGateway,
 		mark:       e.cfg.Queue.Mark,
 		routeTable: routeTable,
-		routes:     tunCfg.Routes,
+		routes:     routes,
 	}
 	if err := e.routes.setup(); err != nil {
 		e.sender.Close()
