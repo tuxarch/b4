@@ -51,8 +51,13 @@ func (e *Engine) config() *config.Config {
 }
 
 func (e *Engine) AddRoute(ip net.IP) {
-	if e.routes == nil || ip == nil {
+	if ip == nil || e.routes == nil {
 		return
+	}
+	select {
+	case <-e.quit:
+		return
+	default:
 	}
 	e.routes.Add(ip.String())
 }
