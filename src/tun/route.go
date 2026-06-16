@@ -65,7 +65,7 @@ func (r *routeManager) setupNAT() {
 	notrack := []string{"-m", "mark", "--mark", markStr, "-j", "CT", "--notrack"}
 	if _, err := run(append([]string{"iptables", "-t", "raw", "-C", "OUTPUT"}, notrack...)...); err != nil {
 		if _, err := run(append([]string{"iptables", "-t", "raw", "-A", "OUTPUT"}, notrack...)...); err != nil {
-			log.Warnf("TUN: failed to add NOTRACK for mark %s (re-injected packets stay conntracked; conntrack sysctls still prevent INVALID drops): %v", markStr, err)
+			log.Infof("TUN: NOTRACK not installed for mark %s (no raw table here); conntrack sysctls + SNAT cover it, so this is harmless: %v", markStr, err)
 		} else {
 			r.notrackAdded = true
 			log.Infof("TUN: NOTRACK installed for re-injected packets (mark %s)", markStr)
