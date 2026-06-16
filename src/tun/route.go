@@ -256,7 +256,14 @@ func (r *routeManager) setupDefaultCapture(srcIP string) error {
 		replaceArgs = append(replaceArgs, "src", srcIP)
 	}
 	if _, err := run(replaceArgs...); err != nil {
-		return fmt.Errorf("ip route replace default: %w", err)
+		if srcIP == "" {
+			return fmt.Errorf("ip route replace default: %w", err)
+		}
+		log.Warnf("TUN: default route with src %s rejected (%v); retrying without src", srcIP, err)
+		if _, err2 := run("ip", "route", "replace", "default", "dev", r.tunName); err2 != nil {
+			return fmt.Errorf("ip route replace default: %w", err2)
+		}
+		srcIP = ""
 	}
 
 	log.Infof("TUN: default-capture routing configured (tun=%s, out=%s gw=%q src=%q mark=0x%x table=%d)",
@@ -270,9 +277,10 @@ func interfacePrimaryIPv4(iface string) string {
 	if err != nil {
 		return ""
 	}
-	for _, field := range strings.Fields(out) {
-		if strings.Contains(field, "/") && strings.Count(field, ".") == 3 {
-			return strings.SplitN(field, "/", 2)[0]
+	fields := strings.Fields(out)
+	for i, f := range fields {
+		if f == "inet" && i+1 < len(fields) {
+			return strings.SplitN(fields[i+1], "/", 2)[0]
 		}
 	}
 	return ""
