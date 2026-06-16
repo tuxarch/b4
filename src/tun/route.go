@@ -22,10 +22,62 @@ type routeManager struct {
 	savedDefault  string
 	savedRPFilter string
 	fwdRulesAdded bool
+	snatAdded     bool
+	notrackAdded  bool
 
 	mu      sync.Mutex
 	srcIP   string
 	current map[string]bool
+}
+
+func (r *routeManager) setupNAT() {
+	markStr := fmt.Sprintf("0x%x", r.mark)
+
+	if r.srcIP != "" {
+		snat := []string{"-t", "nat", "POSTROUTING", "-o", r.tunName, "-j", "SNAT", "--to-source", r.srcIP}
+		if _, err := run(append([]string{"iptables", "-C"}, snat...)...); err != nil {
+			if _, err := run(append([]string{"iptables", "-A"}, snat...)...); err != nil {
+				log.Warnf("TUN: failed to add SNAT %s -> %s: %v", r.tunName, r.srcIP, err)
+			} else {
+				r.snatAdded = true
+				log.Infof("TUN: SNAT installed (traffic into %s -> source %s)", r.tunName, r.srcIP)
+			}
+		} else {
+			r.snatAdded = true
+		}
+	} else {
+		log.Warnf("TUN: no source IP derived for %s; forwarded LAN traffic will not be NAT'd and replies will not return", r.outIface)
+	}
+
+	notrack := []string{"-t", "raw", "OUTPUT", "-m", "mark", "--mark", markStr, "-j", "CT", "--notrack"}
+	if _, err := run(append([]string{"iptables", "-C"}, notrack...)...); err != nil {
+		if _, err := run(append([]string{"iptables", "-A"}, notrack...)...); err != nil {
+			log.Warnf("TUN: failed to add NOTRACK for mark %s (re-injected packets stay conntracked): %v", markStr, err)
+		} else {
+			r.notrackAdded = true
+			log.Infof("TUN: NOTRACK installed for re-injected packets (mark %s)", markStr)
+		}
+	} else {
+		r.notrackAdded = true
+	}
+}
+
+func (r *routeManager) teardownNAT() {
+	markStr := fmt.Sprintf("0x%x", r.mark)
+	if r.snatAdded {
+		for {
+			if _, err := run("iptables", "-t", "nat", "-D", "POSTROUTING", "-o", r.tunName, "-j", "SNAT", "--to-source", r.srcIP); err != nil {
+				break
+			}
+		}
+	}
+	if r.notrackAdded {
+		for {
+			if _, err := run("iptables", "-t", "raw", "-D", "OUTPUT", "-m", "mark", "--mark", markStr, "-j", "CT", "--notrack"); err != nil {
+				break
+			}
+		}
+	}
 }
 
 func (r *routeManager) setupForwarding() {
@@ -178,6 +230,7 @@ func (r *routeManager) setup() error {
 
 	r.loosenRPFilter()
 	r.setupForwarding()
+	r.setupNAT()
 
 	if r.selective() {
 		return r.setupSelective(srcIP)
@@ -356,6 +409,7 @@ func (r *routeManager) teardown() {
 	}
 
 	r.teardownForwarding()
+	r.teardownNAT()
 	r.restoreRPFilter()
 
 	log.Infof("TUN: routing teardown complete")
