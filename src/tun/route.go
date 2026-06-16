@@ -142,8 +142,9 @@ func (r *routeManager) bypassMarkRulePresent() bool {
 		return false
 	}
 	bm := fmt.Sprintf("0x%x/0x%x", r.bypassMark, r.bypassMark)
+	tableStr := fmt.Sprintf("%d", r.routeTable)
 	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "fwmark "+bm) && strings.Contains(line, "lookup "+fmt.Sprintf("%d", r.routeTable)) {
+		if ruleFieldValue(line, "lookup") == tableStr && ruleFieldValue(line, "fwmark") == bm {
 			return true
 		}
 	}
@@ -459,13 +460,27 @@ func (r *routeManager) setupBypassTable() error {
 	return r.addBypassDefault(tableStr)
 }
 
+func ruleFieldValue(line, key string) string {
+	fields := strings.Fields(line)
+	for i := 0; i+1 < len(fields); i++ {
+		if fields[i] == key {
+			return fields[i+1]
+		}
+	}
+	return ""
+}
+
 func (r *routeManager) ownsBypassTable(markStr, tableStr string) bool {
 	out, err := run("ip", "rule", "show")
 	if err != nil {
 		return false
 	}
 	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "fwmark "+markStr) && strings.Contains(line, "lookup "+tableStr) {
+		if ruleFieldValue(line, "lookup") != tableStr {
+			continue
+		}
+		fw := ruleFieldValue(line, "fwmark")
+		if fw == markStr || strings.HasPrefix(fw, markStr+"/") {
 			return true
 		}
 	}
