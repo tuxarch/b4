@@ -34,6 +34,11 @@ export const WebServerSettings = ({
     setLanguage(lang);
   };
 
+  const hasUsername = !!config.system.web_server.username;
+  const hasPassword =
+    !!config.system.web_server.password ||
+    !!config.system.web_server.password_set;
+
   return (
     <B4Section
       title={t("settings.WebServer.title")}
@@ -103,26 +108,25 @@ export const WebServerSettings = ({
           onChange={(e) =>
             onChange("system.web_server.password", e.target.value)
           }
-          placeholder=""
+          placeholder={
+            config.system.web_server.password_set
+              ? t("settings.WebServer.passwordSetPlaceholder")
+              : ""
+          }
           helperText={t("settings.WebServer.passwordHelp")}
           autoComplete="new-password"
         />
       </B4FormGroup>
-      {((config.system.web_server.username &&
-        !config.system.web_server.password) ||
-        (!config.system.web_server.username &&
-          config.system.web_server.password)) && (
+      {((hasUsername && !hasPassword) || (!hasUsername && hasPassword)) && (
         <B4Alert severity="warning">
           {t("settings.WebServer.authPartialWarning")}
         </B4Alert>
       )}
-      {config.system.web_server.username &&
-        config.system.web_server.password &&
-        !config.system.web_server.tls_cert && (
-          <B4Alert severity="warning">
-            {t("settings.WebServer.authHttpWarning")}
-          </B4Alert>
-        )}
+      {hasUsername && hasPassword && !config.system.web_server.tls_cert && (
+        <B4Alert severity="warning">
+          {t("settings.WebServer.authHttpWarning")}
+        </B4Alert>
+      )}
     </B4Section>
   );
 };

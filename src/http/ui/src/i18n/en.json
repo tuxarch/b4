@@ -227,7 +227,8 @@
       "username": "Username",
       "usernameHelp": "Leave both empty to disable authentication",
       "password": "Password",
-      "passwordHelp": "Password for logging into the web UI",
+      "passwordHelp": "Leave blank to keep the current password. The password is stored as a bcrypt hash, never in plain text.",
+      "passwordSetPlaceholder": "Unchanged (leave blank to keep)",
       "authPartialWarning": "Authentication is only enabled when both username and password are set. Partial credentials will be ignored.",
       "authHttpWarning": "Authentication credentials will be sent over unencrypted HTTP. Configure TLS certificates above for secure HTTPS transport.",
       "languageHelp": "Web interface display language"

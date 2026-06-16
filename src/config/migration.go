@@ -766,7 +766,26 @@ func (c *Config) LoadWithMigration(path string) (bool, error) {
 
 	c.System.Geo.SanitizePaths(filepath.Dir(c.ConfigPath))
 
+	if c.migratePasswordHash() {
+		migrated = true
+	}
+
 	return migrated, nil
+}
+
+func (c *Config) migratePasswordHash() bool {
+	p := c.System.WebServer.Password
+	if p == "" || IsHashedPassword(p) {
+		return false
+	}
+	h, err := HashPassword(p)
+	if err != nil {
+		log.Errorf("failed to hash web server password during migration: %v", err)
+		return false
+	}
+	c.System.WebServer.Password = h
+	log.Infof("Migrated plaintext web server password to bcrypt hash")
+	return true
 }
 
 func (c *Config) applyMigrations(startVersion int, rawJSON map[string]interface{}) error {

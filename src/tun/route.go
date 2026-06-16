@@ -21,10 +21,41 @@ type routeManager struct {
 	routes        []string
 	savedDefault  string
 	savedRPFilter string
+	fwdRulesAdded bool
 
 	mu      sync.Mutex
 	srcIP   string
 	current map[string]bool
+}
+
+func (r *routeManager) setupForwarding() {
+	ok := true
+	for _, dir := range []string{"-i", "-o"} {
+		if _, err := run("iptables", "-C", "FORWARD", dir, r.tunName, "-j", "ACCEPT"); err == nil {
+			continue
+		}
+		if _, err := run("iptables", "-I", "FORWARD", dir, r.tunName, "-j", "ACCEPT"); err != nil {
+			log.Warnf("TUN: failed to add FORWARD accept (%s %s): %v", dir, r.tunName, err)
+			ok = false
+		}
+	}
+	r.fwdRulesAdded = ok
+	if ok {
+		log.Infof("TUN: FORWARD accept rules installed for %s", r.tunName)
+	}
+}
+
+func (r *routeManager) teardownForwarding() {
+	if !r.fwdRulesAdded {
+		return
+	}
+	for _, dir := range []string{"-i", "-o"} {
+		for {
+			if _, err := run("iptables", "-D", "FORWARD", dir, r.tunName, "-j", "ACCEPT"); err != nil {
+				break
+			}
+		}
+	}
 }
 
 func (r *routeManager) selective() bool {
@@ -141,7 +172,12 @@ func (r *routeManager) setup() error {
 		log.Warnf("TUN: failed to set MTU: %v", err)
 	}
 
+	if err := os.WriteFile("/proc/sys/net/ipv6/conf/"+r.tunName+"/disable_ipv6", []byte("1\n"), 0644); err != nil {
+		log.Tracef("TUN: could not disable IPv6 on %s: %v", r.tunName, err)
+	}
+
 	r.loosenRPFilter()
+	r.setupForwarding()
 
 	if r.selective() {
 		return r.setupSelective(srcIP)
@@ -319,6 +355,7 @@ func (r *routeManager) teardown() {
 		log.Warnf("TUN: failed to delete %s: %v", r.tunName, err)
 	}
 
+	r.teardownForwarding()
 	r.restoreRPFilter()
 
 	log.Infof("TUN: routing teardown complete")

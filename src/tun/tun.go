@@ -34,6 +34,7 @@ type Engine struct {
 	stopOnce      sync.Once
 	fwdCount      uint64
 	fwdErrCount   uint64
+	v6DropCount   uint64
 	lastFwdErrLog int64
 }
 
@@ -228,10 +229,8 @@ func (e *Engine) forwardPacket(raw []byte) {
 		}
 		err = e.sender.SendIPv4(raw, raw[16:20])
 	case 6:
-		if len(raw) < 40 {
-			return
-		}
-		err = e.sender.SendIPv6(raw, raw[24:40])
+		atomic.AddUint64(&e.v6DropCount, 1)
+		return
 	default:
 		return
 	}
@@ -269,7 +268,7 @@ func (e *Engine) Stop() {
 			e.sender.Close()
 		}
 
-		log.Infof("TUN: engine stopped (%d packets forwarded, %d forward errors)",
-			atomic.LoadUint64(&e.fwdCount), atomic.LoadUint64(&e.fwdErrCount))
+		log.Infof("TUN: engine stopped (%d packets forwarded, %d forward errors, %d ipv6 dropped)",
+			atomic.LoadUint64(&e.fwdCount), atomic.LoadUint64(&e.fwdErrCount), atomic.LoadUint64(&e.v6DropCount))
 	})
 }
