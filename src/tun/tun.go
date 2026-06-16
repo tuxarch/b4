@@ -169,6 +169,7 @@ func (e *Engine) Start() error {
 		udpLimit:   cfg.Queue.UDPConnBytesLimit,
 		routeTable: routeTable,
 		routes:     routes,
+		skipTables: cfg.System.Tables.SkipSetup,
 	}
 	if err := e.routes.setup(); err != nil {
 		e.routes.teardown()

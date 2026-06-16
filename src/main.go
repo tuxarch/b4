@@ -245,7 +245,7 @@ func runB4(cmd *cobra.Command, args []string) error {
 			}
 			tables.ApplyConntrackSysctls()
 		} else {
-			log.Infof("Skipping masquerade setup (--skip-tables)")
+			log.Infof("Skipping masquerade and conntrack sysctls (--skip-tables); the TUN engine also skips its own firewall/sysctl rules and only sets up routing")
 		}
 
 		tunEngine = b4tun.NewEngine(&cfg, pool)

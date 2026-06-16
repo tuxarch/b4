@@ -35,6 +35,7 @@ type routeManager struct {
 	udpLimit      int
 	routeTable    int
 	routes        []string
+	skipTables    bool
 	savedDefault  string
 	savedRPFilter string
 	fwdRulesAdded bool
@@ -380,9 +381,13 @@ func (r *routeManager) setup() error {
 		log.Warnf("TUN: address_v6 %s is set, leaving IPv6 enabled on %s - note IPv6 is not yet forwarded in TUN mode, so v6 packets are dropped", r.tunAddrV6, r.tunName)
 	}
 
-	r.loosenRPFilter()
-	r.setupForwarding()
-	r.setupNAT()
+	if r.skipTables {
+		log.Infof("TUN: --skip-tables set; skipping rp_filter/FORWARD/SNAT/NOTRACK/connbytes - manage NAT and forwarding yourself (b4 still sets up routing: device, capture, bypass table)")
+	} else {
+		r.loosenRPFilter()
+		r.setupForwarding()
+		r.setupNAT()
+	}
 
 	var capErr error
 	if r.selective() {
@@ -393,7 +398,9 @@ func (r *routeManager) setup() error {
 	if capErr != nil {
 		return capErr
 	}
-	r.setupConnbytesBypass()
+	if !r.skipTables {
+		r.setupConnbytesBypass()
+	}
 	return nil
 }
 
@@ -542,12 +549,14 @@ func (r *routeManager) reconcile() {
 		}
 	}
 
-	if n := r.applyForwarding(); n > 0 {
-		log.Infof("TUN: reconcile restored %d FORWARD accept rule(s) for %s", n, r.tunName)
+	if !r.skipTables {
+		if n := r.applyForwarding(); n > 0 {
+			log.Infof("TUN: reconcile restored %d FORWARD accept rule(s) for %s", n, r.tunName)
+		}
+		r.ensureNAT()
+		r.ensureConnbytesBypass()
 	}
-	r.ensureNAT()
 	r.ensureBypass()
-	r.ensureConnbytesBypass()
 	if r.selective() {
 		r.ensureSelectiveRoutes()
 	} else {
@@ -665,10 +674,12 @@ func (r *routeManager) teardown() {
 		log.Tracef("TUN: %s already gone (removed when the device fd closed)", r.tunName)
 	}
 
-	r.teardownConnbytesBypass()
-	r.teardownForwarding()
-	r.teardownNAT()
-	r.restoreRPFilter()
+	if !r.skipTables {
+		r.teardownConnbytesBypass()
+		r.teardownForwarding()
+		r.teardownNAT()
+		r.restoreRPFilter()
+	}
 
 	log.Infof("TUN: routing teardown complete")
 }
