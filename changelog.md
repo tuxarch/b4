@@ -3,6 +3,7 @@
 ## [1.70.0] - 2026-06-xx
 
 - ADDED: **TUN-interface packet engine for devices without NFQUEUE** - b4 normally receives the packets it processes through the router's firewall (iptables/nftables), which needs kernel modules that some minimal or stripped-down devices lack, so b4 could not run on them at all. A new engine mode under Settings → Feature Flags lets b4 take traffic through a virtual network interface (a TUN device) instead. Choose the uplink b4 sends through (for example `eth0`, `wan0`, or an L2TP/PPP tunnel); by default only the addresses of your enabled sets pass through the virtual interface, leaving the rest of the traffic on its normal path. Covers IPv4 for now. The default NFQUEUE engine is unchanged, so existing setups are unaffected.
+- CHANGED: **Web UI login password is stored as a hash instead of plain text** - the password is kept only as a bcrypt hash and the settings page no longer receives or shows it (leave the field blank to keep the current one, or type a new one to replace it); repeated failed logins from the same address are temporarily blocked, and a signed-in session expires after a day instead of lasting until the service restarts, with existing setups migrated on first start. Before this, the username and password sat in the configuration file exactly as typed, and the password was handed back to the browser on every settings load, so anyone who could read that file (a backup or a snapshot) or capture that response could read the password as-is.
 
 ## [1.69.1] - 2026-06-14
 
