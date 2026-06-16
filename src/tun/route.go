@@ -372,8 +372,12 @@ func (r *routeManager) setup() error {
 		log.Infof("TUN: set %s MTU=%d (matching %s)", r.tunName, mtu, r.outIface)
 	}
 
-	if err := os.WriteFile("/proc/sys/net/ipv6/conf/"+r.tunName+"/disable_ipv6", []byte("1\n"), 0644); err != nil {
-		log.Tracef("TUN: could not disable IPv6 on %s: %v", r.tunName, err)
+	if r.tunAddrV6 == "" {
+		if err := os.WriteFile("/proc/sys/net/ipv6/conf/"+r.tunName+"/disable_ipv6", []byte("1\n"), 0644); err != nil {
+			log.Tracef("TUN: could not disable IPv6 on %s: %v", r.tunName, err)
+		}
+	} else {
+		log.Warnf("TUN: address_v6 %s is set, leaving IPv6 enabled on %s - note IPv6 is not yet forwarded in TUN mode, so v6 packets are dropped", r.tunAddrV6, r.tunName)
 	}
 
 	r.loosenRPFilter()

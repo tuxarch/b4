@@ -34,8 +34,14 @@ func issueToken() (string, error) {
 		return "", err
 	}
 	tok := hex.EncodeToString(b)
+	now := time.Now()
 	activeTokensMu.Lock()
-	activeTokens[tok] = time.Now().Add(tokenTTL)
+	for t, exp := range activeTokens {
+		if now.After(exp) {
+			delete(activeTokens, t)
+		}
+	}
+	activeTokens[tok] = now.Add(tokenTTL)
 	activeTokensMu.Unlock()
 	return tok, nil
 }
@@ -77,7 +83,20 @@ type loginAttempt struct {
 var (
 	loginAttempts   = make(map[string]*loginAttempt)
 	loginAttemptsMu sync.Mutex
+	loginLastSweep  time.Time
 )
+
+func sweepLoginAttemptsLocked(now time.Time) {
+	if now.Sub(loginLastSweep) < loginWindow {
+		return
+	}
+	loginLastSweep = now
+	for ip, a := range loginAttempts {
+		if now.After(a.lockedUntil) && now.Sub(a.windowStart) > loginWindow {
+			delete(loginAttempts, ip)
+		}
+	}
+}
 
 func loginAllowed(ip string) (bool, time.Duration) {
 	now := time.Now()
@@ -97,6 +116,7 @@ func recordLoginFailure(ip string) {
 	now := time.Now()
 	loginAttemptsMu.Lock()
 	defer loginAttemptsMu.Unlock()
+	sweepLoginAttemptsLocked(now)
 	a := loginAttempts[ip]
 	if a == nil || now.Sub(a.windowStart) > loginWindow {
 		a = &loginAttempt{windowStart: now}

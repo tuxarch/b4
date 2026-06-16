@@ -126,11 +126,13 @@ func (e *Engine) Start() error {
 	if tunCfg.OutInterface != "" && deviceName == tunCfg.OutInterface {
 		return log.Errorf("TUN: device_name %q must not equal out_interface", deviceName)
 	}
-	if interfaceExists(deviceName) && !isTunDevice(deviceName) {
-		return log.Errorf("TUN: device_name %q is an existing non-TUN interface; refusing to delete it", deviceName)
+	if interfaceExists(deviceName) {
+		if !isTunDevice(deviceName) {
+			return log.Errorf("TUN: device_name %q is an existing non-TUN interface; refusing to delete it", deviceName)
+		}
+		log.Infof("TUN: removing pre-existing TUN device %s (stale from a previous run)", deviceName)
+		run("ip", "link", "del", deviceName)
 	}
-
-	run("ip", "link", "del", deviceName)
 
 	f, name, err := openTUN(deviceName)
 	if err != nil {
