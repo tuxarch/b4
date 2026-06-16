@@ -75,37 +75,49 @@ func (r *routeManager) setupNAT() {
 	}
 }
 
-func (r *routeManager) teardownNAT() {
-	markStr := fmt.Sprintf("0x%x", r.mark)
-	if r.snatAdded {
-		for {
-			if _, err := run("iptables", "-t", "nat", "-D", "POSTROUTING", "-o", r.tunName, "-j", "SNAT", "--to-source", r.srcIP); err != nil {
-				break
-			}
+func (r *routeManager) removeSNAT() {
+	if !r.snatAdded || r.srcIP == "" {
+		return
+	}
+	for {
+		if _, err := run("iptables", "-t", "nat", "-D", "POSTROUTING", "-o", r.tunName, "-j", "SNAT", "--to-source", r.srcIP); err != nil {
+			break
 		}
 	}
+	r.snatAdded = false
+}
+
+func (r *routeManager) teardownNAT() {
+	r.removeSNAT()
 	if r.notrackAdded {
+		markStr := fmt.Sprintf("0x%x", r.mark)
 		for {
 			if _, err := run("iptables", "-t", "raw", "-D", "OUTPUT", "-m", "mark", "--mark", markStr, "-j", "CT", "--notrack"); err != nil {
 				break
 			}
 		}
+		r.notrackAdded = false
 	}
 }
 
-func (r *routeManager) setupForwarding() {
-	ok := true
+func (r *routeManager) applyForwarding() int {
+	added := 0
 	for _, dir := range []string{"-i", "-o"} {
 		if _, err := run("iptables", "-C", "FORWARD", dir, r.tunName, "-j", "ACCEPT"); err == nil {
 			continue
 		}
 		if _, err := run("iptables", "-I", "FORWARD", dir, r.tunName, "-j", "ACCEPT"); err != nil {
 			log.Warnf("TUN: failed to add FORWARD accept (%s %s): %v", dir, r.tunName, err)
-			ok = false
+		} else {
+			added++
 		}
 	}
-	r.fwdRulesAdded = ok
-	if ok {
+	r.fwdRulesAdded = true
+	return added
+}
+
+func (r *routeManager) setupForwarding() {
+	if r.applyForwarding() > 0 {
 		log.Infof("TUN: FORWARD accept rules installed for %s", r.tunName)
 	}
 }
@@ -354,30 +366,123 @@ func (r *routeManager) setupSelective(srcIP string) error {
 	return nil
 }
 
+func (r *routeManager) replaceDefaultIntoTun() error {
+	args := []string{"ip", "route", "replace", "default", "dev", r.tunName}
+	if r.srcIP != "" {
+		args = append(args, "src", r.srcIP)
+	}
+	if _, err := run(args...); err != nil {
+		if r.srcIP == "" {
+			return err
+		}
+		log.Warnf("TUN: default route with src %s rejected (%v); retrying without src", r.srcIP, err)
+		if _, err2 := run("ip", "route", "replace", "default", "dev", r.tunName); err2 != nil {
+			return err2
+		}
+		r.srcIP = ""
+	}
+	return nil
+}
+
 func (r *routeManager) setupDefaultCapture(srcIP string) error {
 	if err := r.setupBypassTable(); err != nil {
 		return err
 	}
 
-	replaceArgs := []string{"ip", "route", "replace", "default", "dev", r.tunName}
-	if srcIP != "" {
-		replaceArgs = append(replaceArgs, "src", srcIP)
-	}
-	if _, err := run(replaceArgs...); err != nil {
-		if srcIP == "" {
-			return fmt.Errorf("ip route replace default: %w", err)
-		}
-		log.Warnf("TUN: default route with src %s rejected (%v); retrying without src", srcIP, err)
-		if _, err2 := run("ip", "route", "replace", "default", "dev", r.tunName); err2 != nil {
-			return fmt.Errorf("ip route replace default: %w", err2)
-		}
-		srcIP = ""
+	if err := r.replaceDefaultIntoTun(); err != nil {
+		return fmt.Errorf("ip route replace default: %w", err)
 	}
 
 	log.Infof("TUN: default-capture routing configured (tun=%s, out=%s gw=%q src=%q mark=0x%x table=%d)",
-		r.tunName, r.outIface, r.outGateway, srcIP, r.mark, r.routeTable)
+		r.tunName, r.outIface, r.outGateway, r.srcIP, r.mark, r.routeTable)
 
 	return nil
+}
+
+func (r *routeManager) reconcile() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if newIP := interfacePrimaryIPv4(r.outIface); newIP != "" && newIP != r.srcIP {
+		log.Infof("TUN: uplink %s address changed %q -> %q; updating SNAT and capture source", r.outIface, r.srcIP, newIP)
+		r.removeSNAT()
+		r.srcIP = newIP
+		if !r.selective() {
+			if err := r.replaceDefaultIntoTun(); err != nil {
+				log.Warnf("TUN: reconcile failed to refresh default-capture src: %v", err)
+			}
+		}
+	}
+
+	if n := r.applyForwarding(); n > 0 {
+		log.Infof("TUN: reconcile restored %d FORWARD accept rule(s) for %s", n, r.tunName)
+	}
+	r.ensureNAT()
+	r.ensureBypass()
+	if r.selective() {
+		r.ensureSelectiveRoutes()
+	} else {
+		r.ensureDefaultCapture()
+	}
+}
+
+func (r *routeManager) ensureNAT() {
+	if r.srcIP != "" {
+		snat := []string{"-o", r.tunName, "-j", "SNAT", "--to-source", r.srcIP}
+		if _, err := run(append([]string{"iptables", "-t", "nat", "-C", "POSTROUTING"}, snat...)...); err != nil {
+			if _, err := run(append([]string{"iptables", "-t", "nat", "-A", "POSTROUTING"}, snat...)...); err == nil {
+				r.snatAdded = true
+				log.Infof("TUN: reconcile restored SNAT (%s -> %s)", r.tunName, r.srcIP)
+			}
+		} else {
+			r.snatAdded = true
+		}
+	}
+	if r.notrackAdded {
+		markStr := fmt.Sprintf("0x%x", r.mark)
+		notrack := []string{"-m", "mark", "--mark", markStr, "-j", "CT", "--notrack"}
+		if _, err := run(append([]string{"iptables", "-t", "raw", "-C", "OUTPUT"}, notrack...)...); err != nil {
+			if _, err := run(append([]string{"iptables", "-t", "raw", "-A", "OUTPUT"}, notrack...)...); err == nil {
+				log.Infof("TUN: reconcile restored NOTRACK (mark %s)", markStr)
+			}
+		}
+	}
+}
+
+func (r *routeManager) ensureBypass() {
+	markStr := fmt.Sprintf("0x%x", r.mark)
+	tableStr := fmt.Sprintf("%d", r.routeTable)
+	if !r.ownsBypassTable(markStr, tableStr) {
+		if _, err := run("ip", "rule", "add", "fwmark", markStr, "lookup", tableStr, "priority", "100"); err != nil {
+			log.Warnf("TUN: reconcile failed to restore fwmark rule: %v", err)
+		} else {
+			log.Infof("TUN: reconcile restored fwmark rule (mark %s -> table %s)", markStr, tableStr)
+		}
+	}
+	if out, _ := run("ip", "route", "show", "table", tableStr); strings.TrimSpace(out) == "" {
+		if err := r.addBypassDefault(tableStr); err != nil {
+			log.Warnf("TUN: reconcile failed to restore bypass default route: %v", err)
+		} else {
+			log.Infof("TUN: reconcile restored bypass default route (table %s)", tableStr)
+		}
+	}
+}
+
+func (r *routeManager) ensureDefaultCapture() {
+	out, _ := run("ip", "-4", "route", "show", "default")
+	if strings.Contains(out, "dev "+r.tunName) {
+		return
+	}
+	log.Infof("TUN: reconcile re-capturing default route into %s (it was reverted)", r.tunName)
+	if err := r.replaceDefaultIntoTun(); err != nil {
+		log.Warnf("TUN: reconcile failed to re-capture default route: %v", err)
+	}
+}
+
+func (r *routeManager) ensureSelectiveRoutes() {
+	for p := range r.current {
+		r.addRoute(p)
+	}
 }
 
 func interfacePrimaryIPv4(iface string) string {

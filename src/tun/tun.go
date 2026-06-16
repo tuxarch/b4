@@ -177,7 +177,33 @@ func (e *Engine) Start() error {
 	}
 
 	log.Infof("TUN: started %d reader threads", threads)
+
+	e.wg.Add(1)
+	go e.reconcileLoop()
+
 	return nil
+}
+
+func (e *Engine) reconcileLoop() {
+	defer e.wg.Done()
+
+	interval := time.Duration(e.config().System.Tables.MonitorInterval) * time.Second
+	if interval < 10*time.Second {
+		interval = 10 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-e.quit:
+			return
+		case <-ticker.C:
+			if e.routes != nil {
+				e.routes.reconcile()
+			}
+		}
+	}
 }
 
 func (e *Engine) readLoop(workerIdx int) {
