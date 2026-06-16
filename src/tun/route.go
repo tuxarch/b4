@@ -4,11 +4,24 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/daniellavrushin/b4/log"
 )
+
+func interfaceMTU(iface string) int {
+	b, err := os.ReadFile("/sys/class/net/" + iface + "/mtu")
+	if err != nil {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil {
+		return 0
+	}
+	return n
+}
 
 type routeManager struct {
 	tunName       string
@@ -34,9 +47,9 @@ func (r *routeManager) setupNAT() {
 	markStr := fmt.Sprintf("0x%x", r.mark)
 
 	if r.srcIP != "" {
-		snat := []string{"-t", "nat", "POSTROUTING", "-o", r.tunName, "-j", "SNAT", "--to-source", r.srcIP}
-		if _, err := run(append([]string{"iptables", "-C"}, snat...)...); err != nil {
-			if _, err := run(append([]string{"iptables", "-A"}, snat...)...); err != nil {
+		snat := []string{"-o", r.tunName, "-j", "SNAT", "--to-source", r.srcIP}
+		if _, err := run(append([]string{"iptables", "-t", "nat", "-C", "POSTROUTING"}, snat...)...); err != nil {
+			if _, err := run(append([]string{"iptables", "-t", "nat", "-A", "POSTROUTING"}, snat...)...); err != nil {
 				log.Warnf("TUN: failed to add SNAT %s -> %s: %v", r.tunName, r.srcIP, err)
 			} else {
 				r.snatAdded = true
@@ -49,10 +62,10 @@ func (r *routeManager) setupNAT() {
 		log.Warnf("TUN: no source IP derived for %s; forwarded LAN traffic will not be NAT'd and replies will not return", r.outIface)
 	}
 
-	notrack := []string{"-t", "raw", "OUTPUT", "-m", "mark", "--mark", markStr, "-j", "CT", "--notrack"}
-	if _, err := run(append([]string{"iptables", "-C"}, notrack...)...); err != nil {
-		if _, err := run(append([]string{"iptables", "-A"}, notrack...)...); err != nil {
-			log.Warnf("TUN: failed to add NOTRACK for mark %s (re-injected packets stay conntracked): %v", markStr, err)
+	notrack := []string{"-m", "mark", "--mark", markStr, "-j", "CT", "--notrack"}
+	if _, err := run(append([]string{"iptables", "-t", "raw", "-C", "OUTPUT"}, notrack...)...); err != nil {
+		if _, err := run(append([]string{"iptables", "-t", "raw", "-A", "OUTPUT"}, notrack...)...); err != nil {
+			log.Warnf("TUN: failed to add NOTRACK for mark %s (re-injected packets stay conntracked; conntrack sysctls still prevent INVALID drops): %v", markStr, err)
 		} else {
 			r.notrackAdded = true
 			log.Infof("TUN: NOTRACK installed for re-injected packets (mark %s)", markStr)
@@ -220,8 +233,14 @@ func (r *routeManager) setup() error {
 	if _, err := run("ip", "link", "set", r.tunName, "up"); err != nil {
 		return fmt.Errorf("ip link set up: %w", err)
 	}
-	if _, err := run("ip", "link", "set", r.tunName, "mtu", "1500"); err != nil {
-		log.Warnf("TUN: failed to set MTU: %v", err)
+	mtu := interfaceMTU(r.outIface)
+	if mtu <= 0 {
+		mtu = 1500
+	}
+	if _, err := run("ip", "link", "set", r.tunName, "mtu", strconv.Itoa(mtu)); err != nil {
+		log.Warnf("TUN: failed to set MTU %d: %v", mtu, err)
+	} else {
+		log.Infof("TUN: set %s MTU=%d (matching %s)", r.tunName, mtu, r.outIface)
 	}
 
 	if err := os.WriteFile("/proc/sys/net/ipv6/conf/"+r.tunName+"/disable_ipv6", []byte("1\n"), 0644); err != nil {
@@ -285,7 +304,7 @@ func (r *routeManager) setupBypassTable() error {
 	r.delFwmarkRule(markStr, tableStr)
 
 	if _, err := run("ip", "rule", "add", "fwmark", markStr, "lookup", tableStr, "priority", "100"); err != nil {
-		return fmt.Errorf("ip rule add: %w", err)
+		return fmt.Errorf("ip rule add (whole-default capture needs policy routing; a busybox 'ip' may reject custom tables - install full iproute2, e.g. 'apk add iproute2', or set queue.tun.route_table <= 255): %w", err)
 	}
 	return r.addBypassDefault(tableStr)
 }
@@ -382,7 +401,7 @@ func (r *routeManager) addBypassDefault(tableStr string) error {
 	}
 	args = append(args, "dev", r.outIface, "table", tableStr)
 	if _, err := run(args...); err != nil {
-		return fmt.Errorf("ip route replace table: %w", err)
+		return fmt.Errorf("ip route replace table (whole-default capture needs policy routing; a busybox 'ip' may reject custom tables - install full iproute2, e.g. 'apk add iproute2', or set queue.tun.route_table <= 255): %w", err)
 	}
 	return nil
 }
@@ -404,8 +423,12 @@ func (r *routeManager) teardown() {
 	if _, err := run("ip", "route", "flush", "table", tableStr); err != nil {
 		log.Warnf("TUN: failed to flush route table %s: %v", tableStr, err)
 	}
-	if _, err := run("ip", "link", "del", r.tunName); err != nil {
-		log.Warnf("TUN: failed to delete %s: %v", r.tunName, err)
+	if interfaceExists(r.tunName) {
+		if _, err := run("ip", "link", "del", r.tunName); err != nil {
+			log.Warnf("TUN: failed to delete %s: %v", r.tunName, err)
+		}
+	} else {
+		log.Tracef("TUN: %s already gone (removed when the device fd closed)", r.tunName)
 	}
 
 	r.teardownForwarding()
