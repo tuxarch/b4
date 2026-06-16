@@ -243,6 +243,7 @@ func runB4(cmd *cobra.Command, args []string) error {
 				metrics.RecordEvent("error", fmt.Sprintf("Failed to apply masquerade: %v", err))
 				return fmt.Errorf("failed to apply masquerade: %w", err)
 			}
+			tables.ApplyConntrackSysctls()
 		} else {
 			log.Infof("Skipping masquerade setup (--skip-tables)")
 		}
@@ -506,6 +507,7 @@ func gracefulShutdown(cfg *config.Config, pool *nfq.Pool, tunEngine *b4tun.Engin
 	if tunEngine != nil {
 		if !cfg.System.Tables.SkipSetup {
 			tables.ClearMasqueradeOnly(cfg)
+			tables.RevertConntrackSysctls()
 		}
 		metrics.TablesStatus = "inactive"
 	} else if !cfg.System.Tables.SkipSetup {

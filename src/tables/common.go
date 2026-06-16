@@ -76,6 +76,18 @@ func ApplyMasqueradeOnly(cfg *config.Config) error {
 	return NewIPTablesManager(cfg, backend == backendIPTablesLegacy).ApplyMasquerade()
 }
 
+func ApplyConntrackSysctls() {
+	for _, s := range b4SysctlSettings() {
+		s.Apply()
+	}
+}
+
+func RevertConntrackSysctls() {
+	for _, s := range b4SysctlSettings() {
+		s.RevertBack()
+	}
+}
+
 func ClearMasqueradeOnly(cfg *config.Config) {
 	if !cfg.System.Tables.Masquerade {
 		return
