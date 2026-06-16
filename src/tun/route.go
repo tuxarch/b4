@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/daniellavrushin/b4/log"
+	"github.com/daniellavrushin/b4/tables"
 )
 
 func interfaceMTU(iface string) int {
@@ -350,7 +351,9 @@ func (r *routeManager) setup() error {
 		srcIP = interfacePrimaryIPv4(r.outIface)
 	}
 	r.srcIP = srcIP
-	r.current = make(map[string]bool)
+	if r.current == nil {
+		r.current = make(map[string]bool)
+	}
 
 	if _, err := run("ip", "addr", "add", r.tunAddr, "dev", r.tunName); err != nil {
 		return fmt.Errorf("ip addr add: %w", err)
@@ -699,6 +702,15 @@ func extractGateway(routeLine string) string {
 }
 
 func run(args ...string) (string, error) {
+	if len(args) > 0 && (args[0] == "iptables" || args[0] == "ip6tables") {
+		if w := tables.WaitArgs(args[0]); len(w) > 0 {
+			newArgs := make([]string, 0, len(args)+len(w))
+			newArgs = append(newArgs, args[0])
+			newArgs = append(newArgs, w...)
+			newArgs = append(newArgs, args[1:]...)
+			args = newArgs
+		}
+	}
 	cmd := exec.Command(args[0], args[1:]...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

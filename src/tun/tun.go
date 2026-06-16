@@ -170,6 +170,7 @@ func (e *Engine) Start() error {
 		routeTable: routeTable,
 		routes:     routes,
 		skipTables: cfg.System.Tables.SkipSetup,
+		current:    make(map[string]bool),
 	}
 	if err := e.routes.setup(); err != nil {
 		e.routes.teardown()
