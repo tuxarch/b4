@@ -94,6 +94,7 @@ type TUNConfig struct {
 	OutGateway   string   `json:"out_gateway"`
 	RouteTable   int      `json:"route_table"`
 	Routes       []string `json:"routes"`
+	BypassMark   uint     `json:"bypass_mark"`
 }
 
 type DevicesConfig struct {

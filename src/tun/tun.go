@@ -20,6 +20,7 @@ const (
 	defaultDeviceName = "b4tun0"
 	defaultAddress    = "10.255.0.1/30"
 	defaultRouteTable = 9999
+	defaultBypassMark = 1 << 14
 )
 
 type Engine struct {
@@ -111,6 +112,10 @@ func (e *Engine) Start() error {
 	if routeTable == 0 {
 		routeTable = defaultRouteTable
 	}
+	bypassMark := tunCfg.BypassMark
+	if bypassMark == 0 {
+		bypassMark = defaultBypassMark
+	}
 
 	for _, w := range e.pool.Workers {
 		if err := w.InitSender(); err != nil {
@@ -157,6 +162,9 @@ func (e *Engine) Start() error {
 		outIface:   tunCfg.OutInterface,
 		outGateway: tunCfg.OutGateway,
 		mark:       cfg.Queue.Mark,
+		bypassMark: bypassMark,
+		tcpLimit:   cfg.Queue.TCPConnBytesLimit,
+		udpLimit:   cfg.Queue.UDPConnBytesLimit,
 		routeTable: routeTable,
 		routes:     routes,
 	}

@@ -30,6 +30,9 @@ type routeManager struct {
 	outIface      string
 	outGateway    string
 	mark          uint
+	bypassMark    uint
+	tcpLimit      int
+	udpLimit      int
 	routeTable    int
 	routes        []string
 	savedDefault  string
@@ -97,6 +100,120 @@ func (r *routeManager) teardownNAT() {
 			}
 		}
 		r.notrackAdded = false
+	}
+}
+
+type mangleRule struct {
+	chain string
+	spec  []string
+}
+
+func (r *routeManager) connbytesRules() []mangleRule {
+	bm := fmt.Sprintf("0x%x/0x%x", r.bypassMark, r.bypassMark)
+	var rules []mangleRule
+	add := func(proto string, limit int) {
+		if limit <= 0 {
+			return
+		}
+		rng := fmt.Sprintf("%d:", limit+1)
+		for _, chain := range []string{"PREROUTING", "OUTPUT"} {
+			rules = append(rules, mangleRule{chain: chain, spec: []string{
+				"-p", proto, "-m", "connbytes",
+				"--connbytes", rng, "--connbytes-dir", "original", "--connbytes-mode", "packets",
+				"-j", "MARK", "--set-xmark", bm,
+			}})
+		}
+	}
+	add("tcp", r.tcpLimit)
+	add("udp", r.udpLimit)
+	return rules
+}
+
+func (r *routeManager) bypassMarkRuleArgs() []string {
+	bm := fmt.Sprintf("0x%x/0x%x", r.bypassMark, r.bypassMark)
+	return []string{"fwmark", bm, "lookup", fmt.Sprintf("%d", r.routeTable), "priority", "99"}
+}
+
+func (r *routeManager) bypassMarkRulePresent() bool {
+	out, err := run("ip", "rule", "show")
+	if err != nil {
+		return false
+	}
+	bm := fmt.Sprintf("0x%x/0x%x", r.bypassMark, r.bypassMark)
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "fwmark "+bm) && strings.Contains(line, "lookup "+fmt.Sprintf("%d", r.routeTable)) {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *routeManager) setupConnbytesBypass() {
+	if r.bypassMark == 0 {
+		return
+	}
+	rules := r.connbytesRules()
+	if len(rules) == 0 {
+		return
+	}
+
+	if !r.bypassMarkRulePresent() {
+		if _, err := run(append([]string{"ip", "rule", "add"}, r.bypassMarkRuleArgs()...)...); err != nil {
+			log.Warnf("TUN: failed to add established-bypass ip rule (mark 0x%x); established connections will keep flowing through the tun: %v", r.bypassMark, err)
+			return
+		}
+	}
+
+	added := 0
+	for _, mr := range rules {
+		if _, err := run(append([]string{"iptables", "-t", "mangle", "-C", mr.chain}, mr.spec...)...); err == nil {
+			continue
+		}
+		if _, err := run(append([]string{"iptables", "-t", "mangle", "-A", mr.chain}, mr.spec...)...); err != nil {
+			log.Warnf("TUN: failed to add connbytes-bypass rule in %s (xt_connbytes missing? established connections stay on the tun): %v", mr.chain, err)
+		} else {
+			added++
+		}
+	}
+	if added > 0 {
+		log.Infof("TUN: connbytes bypass enabled - only the first %d tcp / %d udp packets per connection go through %s (mark 0x%x -> table %d)",
+			r.tcpLimit, r.udpLimit, r.tunName, r.bypassMark, r.routeTable)
+	}
+}
+
+func (r *routeManager) teardownConnbytesBypass() {
+	if r.bypassMark == 0 {
+		return
+	}
+	for _, mr := range r.connbytesRules() {
+		for {
+			if _, err := run(append([]string{"iptables", "-t", "mangle", "-D", mr.chain}, mr.spec...)...); err != nil {
+				break
+			}
+		}
+	}
+	for {
+		if _, err := run(append([]string{"ip", "rule", "del"}, r.bypassMarkRuleArgs()...)...); err != nil {
+			break
+		}
+	}
+}
+
+func (r *routeManager) ensureConnbytesBypass() {
+	if r.bypassMark == 0 {
+		return
+	}
+	if !r.bypassMarkRulePresent() {
+		if _, err := run(append([]string{"ip", "rule", "add"}, r.bypassMarkRuleArgs()...)...); err == nil {
+			log.Infof("TUN: reconcile restored established-bypass ip rule (mark 0x%x)", r.bypassMark)
+		}
+	}
+	for _, mr := range r.connbytesRules() {
+		if _, err := run(append([]string{"iptables", "-t", "mangle", "-C", mr.chain}, mr.spec...)...); err != nil {
+			if _, err := run(append([]string{"iptables", "-t", "mangle", "-A", mr.chain}, mr.spec...)...); err == nil {
+				log.Infof("TUN: reconcile restored connbytes-bypass rule in %s", mr.chain)
+			}
+		}
 	}
 }
 
@@ -263,10 +380,17 @@ func (r *routeManager) setup() error {
 	r.setupForwarding()
 	r.setupNAT()
 
+	var capErr error
 	if r.selective() {
-		return r.setupSelective(srcIP)
+		capErr = r.setupSelective(srcIP)
+	} else {
+		capErr = r.setupDefaultCapture(srcIP)
 	}
-	return r.setupDefaultCapture(srcIP)
+	if capErr != nil {
+		return capErr
+	}
+	r.setupConnbytesBypass()
+	return nil
 }
 
 func rpFilterPath(iface string) string {
@@ -419,6 +543,7 @@ func (r *routeManager) reconcile() {
 	}
 	r.ensureNAT()
 	r.ensureBypass()
+	r.ensureConnbytesBypass()
 	if r.selective() {
 		r.ensureSelectiveRoutes()
 	} else {
@@ -536,6 +661,7 @@ func (r *routeManager) teardown() {
 		log.Tracef("TUN: %s already gone (removed when the device fd closed)", r.tunName)
 	}
 
+	r.teardownConnbytesBypass()
 	r.teardownForwarding()
 	r.teardownNAT()
 	r.restoreRPFilter()
