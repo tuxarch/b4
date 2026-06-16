@@ -255,6 +255,7 @@ func runB4(cmd *cobra.Command, args []string) error {
 			if !cfg.System.Tables.SkipSetup {
 				tables.ClearMasqueradeOnly(&cfg)
 			}
+			pool.Stop()
 			metrics.RecordEvent("error", fmt.Sprintf("TUN engine start failed: %v", err))
 			metrics.NFQueueStatus = "error"
 			return fmt.Errorf("TUN engine start failed: %w", err)
