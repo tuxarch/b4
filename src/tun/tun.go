@@ -221,33 +221,31 @@ func (e *Engine) forwardPacket(raw []byte) {
 	if len(raw) == 0 {
 		return
 	}
-	var err error
 	switch raw[0] >> 4 {
 	case 4:
 		if len(raw) < 20 {
 			return
 		}
-		err = e.sender.SendIPv4(raw, raw[16:20])
+		if err := e.sender.SendIPv4(raw, raw[16:20]); err != nil {
+			e.logForwardError(err, net.IP(raw[12:16]).String(), net.IP(raw[16:20]).String())
+			return
+		}
 	case 6:
 		atomic.AddUint64(&e.v6DropCount, 1)
 		return
 	default:
 		return
 	}
-	if err != nil {
-		e.logForwardError(err)
-		return
-	}
 	atomic.AddUint64(&e.fwdCount, 1)
 }
 
-func (e *Engine) logForwardError(err error) {
+func (e *Engine) logForwardError(err error, src, dst string) {
 	n := atomic.AddUint64(&e.fwdErrCount, 1)
 	now := time.Now().Unix()
 	last := atomic.LoadInt64(&e.lastFwdErrLog)
 	if now-last >= 5 && atomic.CompareAndSwapInt64(&e.lastFwdErrLog, last, now) {
-		log.Warnf("TUN: failed to forward packet out %s (%d errors, %d ok): %v",
-			e.config().Queue.TUN.OutInterface, n, atomic.LoadUint64(&e.fwdCount), err)
+		log.Warnf("TUN: failed to forward packet out %s (%d errors, %d ok): %v [last fail %s -> %s]",
+			e.config().Queue.TUN.OutInterface, n, atomic.LoadUint64(&e.fwdCount), err, src, dst)
 	}
 }
 
