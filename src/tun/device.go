@@ -53,6 +53,11 @@ func openTUN(name string) (*os.File, string, error) {
 		actualName = name
 	}
 
+	if err := unix.SetNonblock(fd, true); err != nil {
+		unix.Close(fd)
+		return nil, "", fmt.Errorf("set nonblock: %w", err)
+	}
+
 	file := os.NewFile(uintptr(fd), tunDevice)
 	return file, actualName, nil
 }
