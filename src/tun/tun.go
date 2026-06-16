@@ -245,9 +245,7 @@ func (e *Engine) readLoop(workerIdx int) {
 			continue
 		}
 
-		raw := make([]byte, n)
-		copy(raw, buf[:n])
-
+		raw := buf[:n]
 		if worker.ProcessPacket(raw) == engine.VerdictAccept {
 			e.forwardPacket(raw)
 		}
