@@ -57,16 +57,14 @@ func (im *IPTablesManager) ApplyMasquerade() error {
 
 func (im *IPTablesManager) ClearMasquerade() {
 	iptBin := im.iptablesBin()
-	for {
-		if _, err := run(iptBin, "-w", "-t", "nat", "-D", "POSTROUTING", "-j", "MASQUERADE"); err != nil {
-			break
-		}
-	}
+	args := []string{iptBin, "-w", "-t", "nat", "-D", "POSTROUTING"}
 	if iface := im.cfg.System.Tables.MasqueradeInterface; iface != "" {
-		for {
-			if _, err := run(iptBin, "-w", "-t", "nat", "-D", "POSTROUTING", "-o", iface, "-j", "MASQUERADE"); err != nil {
-				break
-			}
+		args = append(args, "-o", iface)
+	}
+	args = append(args, "-j", "MASQUERADE")
+	for {
+		if _, err := run(args...); err != nil {
+			break
 		}
 	}
 }
