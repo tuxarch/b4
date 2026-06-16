@@ -156,6 +156,9 @@ func runB4(cmd *cobra.Command, args []string) error {
 		if c.System.Tables.SkipSetup {
 			return nil
 		}
+		if c.Queue.Mode == "tun" {
+			return nil
+		}
 		if discoveryRT.IsActive() {
 			log.Warnf("Tables refresh requested while discovery is active, waiting for discovery to finish...")
 			deadline := time.After(5 * time.Minute)

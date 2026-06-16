@@ -163,7 +163,6 @@ export interface TUNConfig {
   out_gateway?: string;
   route_table?: number;
   routes?: string[];
-  bypass_mark?: number;
 }
 
 export interface Device {
