@@ -37,6 +37,15 @@ func (im *IPTablesManager) ApplyMasquerade() error {
 		masqSpec = []string{"-o", iface, "-j", "MASQUERADE"}
 	}
 
+	returnSpec := []string{"-m", "mark", "--mark", im.masqMarkAccept(), "-j", "RETURN"}
+	checkRet := append([]string{iptBin, "-w", "-t", "nat", "-C", "POSTROUTING"}, returnSpec...)
+	if _, err := run(checkRet...); err != nil {
+		insRet := append([]string{iptBin, "-w", "-t", "nat", "-I", "POSTROUTING"}, returnSpec...)
+		if _, err := run(insRet...); err != nil {
+			return fmt.Errorf("failed to add masquerade mark-bypass rule: %w", err)
+		}
+	}
+
 	checkArgs := append([]string{iptBin, "-w", "-t", "nat", "-C", "POSTROUTING"}, masqSpec...)
 	if _, err := run(checkArgs...); err == nil {
 		return nil
@@ -67,6 +76,20 @@ func (im *IPTablesManager) ClearMasquerade() {
 			break
 		}
 	}
+
+	retArgs := []string{iptBin, "-w", "-t", "nat", "-D", "POSTROUTING", "-m", "mark", "--mark", im.masqMarkAccept(), "-j", "RETURN"}
+	for {
+		if _, err := run(retArgs...); err != nil {
+			break
+		}
+	}
+}
+
+func (im *IPTablesManager) masqMarkAccept() string {
+	if im.cfg.Queue.Mark == 0 {
+		return "0x8000/0x8000"
+	}
+	return fmt.Sprintf("0x%x/0x%x", im.cfg.Queue.Mark, im.cfg.Queue.Mark)
 }
 
 func (im *IPTablesManager) iptablesBin() string {
@@ -628,6 +651,7 @@ func (manager *IPTablesManager) buildManifest() (Manifest, error) {
 				masqSpec = []string{"-o", iface, "-j", "MASQUERADE"}
 			}
 			rules = append(rules,
+				Rule{manager: manager, IPT: ipt, Table: "nat", Chain: "POSTROUTING", Action: "I", Spec: []string{"-m", "mark", "--mark", markAccept, "-j", "RETURN"}},
 				Rule{manager: manager, IPT: ipt, Table: "nat", Chain: "POSTROUTING", Action: "A", Spec: masqSpec},
 			)
 		}
@@ -910,6 +934,12 @@ func (ipt *IPTablesManager) clearB4JumpRules() {
 				if err != nil {
 					break
 				}
+			}
+		}
+		for {
+			_, err := run(iptBin, "-w", "-t", "nat", "-D", "POSTROUTING", "-m", "mark", "--mark", ipt.masqMarkAccept(), "-j", "RETURN")
+			if err != nil {
+				break
 			}
 		}
 

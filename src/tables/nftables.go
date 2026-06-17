@@ -399,6 +399,16 @@ func (n *NFTablesManager) ApplyMasquerade() error {
 		return fmt.Errorf("failed to create nat postrouting chain: %w", err)
 	}
 
+	markValue := n.cfg.Queue.Mark
+	if markValue == 0 {
+		markValue = 0x8000
+	}
+	markAccept := fmt.Sprintf("0x%x", markValue)
+	if _, err := n.runNft("add", "rule", "ip", nftNatTableName, nftNatChainName,
+		"meta", "mark", "&", markAccept, "==", markAccept, "return"); err != nil {
+		return fmt.Errorf("failed to add masquerade mark-bypass rule: %w", err)
+	}
+
 	ruleArgs := []string{"add", "rule", "ip", nftNatTableName, nftNatChainName}
 	if iface := n.cfg.System.Tables.MasqueradeInterface; iface != "" {
 		ruleArgs = append(ruleArgs, "oifname", fmt.Sprintf("%q", iface))
