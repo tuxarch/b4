@@ -712,11 +712,11 @@ func (w *Worker) handleUDPPacket(vc *verdictCtx, pkt *pktInfo, cfg *config.Confi
 			if config.NormalizeBlockAction(set.Routing.BlockAction) != config.BlockActionDrop {
 				if pkt.ver == IPv4 {
 					if icmp := sock.BuildICMPv4Reject(pkt.raw, pkt.src.To4(), pkt.dst.To4()); icmp != nil {
-						_ = w.sock.SendIPv4(icmp, pkt.src)
+						_ = w.clientSender().SendIPv4(icmp, pkt.src)
 					}
 				} else {
 					if icmp := sock.BuildICMPv6Reject(pkt.raw, pkt.src.To16(), pkt.dst.To16()); icmp != nil {
-						_ = w.sock.SendIPv6(icmp, pkt.src)
+						_ = w.clientSender().SendIPv6(icmp, pkt.src)
 					}
 				}
 			}
@@ -745,11 +745,11 @@ func (w *Worker) handleUDPPacket(vc *verdictCtx, pkt *pktInfo, cfg *config.Confi
 		}
 		if pkt.ver == IPv4 {
 			if icmp := sock.BuildICMPv4Reject(pkt.raw, pkt.src.To4(), pkt.dst.To4()); icmp != nil {
-				_ = w.sock.SendIPv4(icmp, pkt.src)
+				_ = w.clientSender().SendIPv4(icmp, pkt.src)
 			}
 		} else {
 			if icmp := sock.BuildICMPv6Reject(pkt.raw, pkt.src.To16(), pkt.dst.To16()); icmp != nil {
-				_ = w.sock.SendIPv6(icmp, pkt.src)
+				_ = w.clientSender().SendIPv6(icmp, pkt.src)
 			}
 		}
 		return 0

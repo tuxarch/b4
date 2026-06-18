@@ -38,7 +38,7 @@ func (w *Worker) sendRSTToClientV4(raw []byte, ihl int, srcIP, dstIP net.IP) {
 	sock.FixIPv4Checksum(rst[:20])
 	sock.FixTCPChecksum(rst)
 
-	if err := w.sock.SendIPv4(rst, srcIP); err != nil {
+	if err := w.clientSender().SendIPv4(rst, srcIP); err != nil {
 		log.Tracef("ip-block: failed to send RST to client %s:%d: %v", srcIP, clientPort, err)
 	}
 }
@@ -71,7 +71,7 @@ func (w *Worker) sendRSTToClientV6(raw []byte, srcIP, dstIP net.IP) {
 
 	sock.FixTCPChecksumV6(rst)
 
-	if err := w.sock.SendIPv6(rst, srcIP); err != nil {
+	if err := w.clientSender().SendIPv6(rst, srcIP); err != nil {
 		log.Tracef("ip-block: failed to send RST to client %s:%d: %v", srcIP, clientPort, err)
 	}
 }

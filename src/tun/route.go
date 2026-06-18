@@ -44,6 +44,8 @@ type routeManager struct {
 	udpPorts     []string
 	tcpLimit     int
 	udpLimit     int
+	dupIPs       []string
+	replyCapture bool
 
 	mu                sync.Mutex
 	srcIP             string

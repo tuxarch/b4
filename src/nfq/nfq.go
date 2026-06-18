@@ -66,6 +66,7 @@ func (w *Worker) Start() error {
 		return err
 	}
 	w.sock = s
+	w.clientSock = s
 
 	c := nfqueue.Config{
 		NfQueue:      w.qnum,
@@ -454,6 +455,9 @@ func (w *Worker) Stop() {
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
+	}
+	if w.clientSock != nil && w.clientSock != w.sock {
+		w.clientSock.Close()
 	}
 	if w.sock != nil {
 		w.sock.Close()

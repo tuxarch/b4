@@ -442,6 +442,17 @@ func (n *NFTablesManager) ClearMasquerade() {
 	}
 }
 
+func (n *NFTablesManager) ClearMSSClamp() {
+	if !hasBinary("nft") {
+		return
+	}
+	if n.tableExists() {
+		if _, err := n.runNft("delete", "table", "inet", nftTableName); err != nil {
+			log.Tracef("NFTABLES: MSS clamp clear (delete table %s): %v", nftTableName, err)
+		}
+	}
+}
+
 func (n *NFTablesManager) ApplyMSSClamp() error {
 	cfg := n.cfg
 	global, globalSize := cfg.HasGlobalMSSClamp()

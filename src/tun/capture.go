@@ -10,10 +10,11 @@ import (
 )
 
 const (
-	tunCaptureChain  = "B4_TUN"
-	tunProbeChain    = "B4_TUN_PROBE"
-	defaultSteerMark = 0x80000
-	captureRulePrio  = 90
+	tunCaptureChain   = "B4_TUN"
+	tunProbeChain     = "B4_TUN_PROBE"
+	defaultSteerMark  = 0x80000
+	defaultClientMark = 0x100000
+	captureRulePrio   = 90
 )
 
 func (r *routeManager) steerMarkStr() string {
@@ -118,6 +119,8 @@ func (r *routeManager) rebuildCaptureChain() {
 	run("iptables", "-t", "mangle", "-F", tunCaptureChain)
 
 	run("iptables", "-t", "mangle", "-A", tunCaptureChain, "-m", "mark", "--mark", guard, "-j", "RETURN")
+	clientGuard := fmt.Sprintf("0x%x/0x%x", defaultClientMark, defaultClientMark)
+	run("iptables", "-t", "mangle", "-A", tunCaptureChain, "-m", "mark", "--mark", clientGuard, "-j", "RETURN")
 
 	for _, set := range excl {
 		if _, err := run("iptables", "-t", "mangle", "-A", tunCaptureChain, "-m", "set", "--match-set", set, "dst", "-j", "RETURN"); err != nil {
@@ -145,6 +148,18 @@ func (r *routeManager) steerSpecs() [][]string {
 		return []string{"-m", "connbytes", "--connbytes-dir", "original", "--connbytes-mode", "packets", "--connbytes", portRange}
 	}
 
+	for _, ip := range r.dupIPs {
+		if r.multiport {
+			for _, chunk := range chunkPorts(r.tcpPorts, 15) {
+				specs = append(specs, append([]string{"-p", "tcp", "-d", ip, "-m", "multiport", "--dports", strings.Join(chunk, ",")}, mark...))
+			}
+		} else {
+			for _, p := range r.tcpPorts {
+				specs = append(specs, append([]string{"-p", "tcp", "-d", ip, "--dport", p}, mark...))
+			}
+		}
+	}
+
 	if r.multiport {
 		for _, chunk := range chunkPorts(r.tcpPorts, 15) {
 			spec := append([]string{"-p", "tcp", "-m", "multiport", "--dports", strings.Join(chunk, ",")}, cb(tcpRange)...)
@@ -166,6 +181,18 @@ func (r *routeManager) steerSpecs() [][]string {
 	}
 
 	specs = append(specs, append([]string{"-p", "udp", "--dport", "53"}, mark...))
+
+	if r.replyCapture {
+		if r.multiport {
+			for _, chunk := range chunkPorts(r.tcpPorts, 15) {
+				specs = append(specs, append([]string{"-p", "tcp", "-m", "multiport", "--sports", strings.Join(chunk, ","), "--tcp-flags", "RST", "RST"}, mark...))
+			}
+		} else {
+			for _, p := range r.tcpPorts {
+				specs = append(specs, append([]string{"-p", "tcp", "--sport", p, "--tcp-flags", "RST", "RST"}, mark...))
+			}
+		}
+	}
 	return specs
 }
 
@@ -236,6 +263,21 @@ func (r *routeManager) teardownPortCapture() {
 		log.Tracef("TUN: capture table %s flush: %v", tableStr, err)
 	}
 	r.captureRulesAdded = false
+}
+
+func portMatches(sport uint16, ports []string) bool {
+	for _, p := range ports {
+		if i := strings.IndexByte(p, ':'); i >= 0 {
+			lo, err1 := strconv.Atoi(p[:i])
+			hi, err2 := strconv.Atoi(p[i+1:])
+			if err1 == nil && err2 == nil && int(sport) >= lo && int(sport) <= hi {
+				return true
+			}
+		} else if n, err := strconv.Atoi(p); err == nil && int(sport) == n {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizePorts(ports []string) []string {

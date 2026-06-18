@@ -100,6 +100,36 @@ func ClearMasqueradeOnly(cfg *config.Config) {
 	NewIPTablesManager(cfg, backend == backendIPTablesLegacy).ClearMasquerade()
 }
 
+func hasMSSClamp(cfg *config.Config) bool {
+	global, _ := cfg.HasGlobalMSSClamp()
+	return global || len(cfg.CollectDeviceMSSClamps()) > 0 || len(cfg.CollectSetMSSClamps()) > 0
+}
+
+func ApplyMSSClampOnly(cfg *config.Config) error {
+	if !hasMSSClamp(cfg) {
+		return nil
+	}
+	loadKernelModules()
+	backend := detectFirewallBackend(cfg)
+	if backend == backendNFTables {
+		nft := NewNFTablesManager(cfg)
+		if err := nft.createTable(); err != nil {
+			return err
+		}
+		return nft.ApplyMSSClamp()
+	}
+	return NewIPTablesManager(cfg, backend == backendIPTablesLegacy).ApplyMSSClamp()
+}
+
+func ClearMSSClampOnly(cfg *config.Config) {
+	backend := detectFirewallBackend(cfg)
+	if backend == backendNFTables {
+		NewNFTablesManager(cfg).ClearMSSClamp()
+		return
+	}
+	NewIPTablesManager(cfg, backend == backendIPTablesLegacy).ClearMSSClamp()
+}
+
 var iptWaitSupport sync.Map
 
 var iptVersionRe = regexp.MustCompile(`v(\d+)\.(\d+)(?:\.(\d+))?`)

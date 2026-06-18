@@ -249,6 +249,9 @@ func runB4(cmd *cobra.Command, args []string) error {
 				return fmt.Errorf("failed to apply masquerade: %w", err)
 			}
 			tables.ApplyConntrackSysctls()
+			if err := tables.ApplyMSSClampOnly(&cfg); err != nil {
+				log.Errorf("Failed to apply MSS clamp in TUN mode: %v", err)
+			}
 		} else {
 			log.Infof("Skipping masquerade and conntrack sysctls (--skip-tables); the TUN engine also skips its own firewall/sysctl rules and only sets up routing")
 		}
@@ -516,6 +519,7 @@ func gracefulShutdown(cfg *config.Config, pool *nfq.Pool, tunEngine *b4tun.Engin
 	if tunEngine != nil {
 		if !cfg.System.Tables.SkipSetup {
 			tables.ClearMasqueradeOnly(cfg)
+			tables.ClearMSSClampOnly(cfg)
 			tables.RevertConntrackSysctls()
 		}
 		metrics.TablesStatus = "inactive"

@@ -110,10 +110,10 @@ func (w *Worker) processDnsPacket(vc *verdictCtx, ipVersion byte, sport uint16, 
 							}
 							if ipVersion == IPv4 {
 								if pkt := sock.BuildUDPPacketV4(originalDst, clientIP, 53, sport, resp); pkt != nil {
-									_ = w.sock.SendIPv4(pkt, clientIP)
+									_ = w.clientSender().SendIPv4(pkt, clientIP)
 								}
 							} else if pkt := sock.BuildUDPPacketV6(originalDst, clientIP, 53, sport, resp); pkt != nil {
-								_ = w.sock.SendIPv6(pkt, clientIP)
+								_ = w.clientSender().SendIPv6(pkt, clientIP)
 							}
 							log.Tracef("DNS sinkhole: %s -> NXDOMAIN for %s (set: %s)", domain, clientIP, set.Name)
 							metrics.GetMetricsCollector().RecordBlock(domain, srcMac)
@@ -291,11 +291,11 @@ func (w *Worker) sendDNSResponseToClient(ipVersion byte, originalDst, clientIP n
 	}
 	if ipVersion == IPv4 {
 		if pkt := sock.BuildUDPPacketV4(originalDst, clientIP, 53, clientPort, resp); pkt != nil {
-			_ = w.sock.SendIPv4(pkt, clientIP)
+			_ = w.clientSender().SendIPv4(pkt, clientIP)
 		}
 	} else {
 		if pkt := sock.BuildUDPPacketV6(originalDst, clientIP, 53, clientPort, resp); pkt != nil {
-			_ = w.sock.SendIPv6(pkt, clientIP)
+			_ = w.clientSender().SendIPv6(pkt, clientIP)
 		}
 	}
 }

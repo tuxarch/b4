@@ -28,6 +28,7 @@ type Engine struct {
 	tunName       string
 	routes        *routeManager
 	sender        *sock.Sender
+	clientSender  *sock.Sender
 	wg            sync.WaitGroup
 	quit          chan struct{}
 	stopOnce      sync.Once
@@ -103,6 +104,19 @@ func (e *Engine) Start() error {
 	}
 	e.sender = sender
 
+	replyCapture := replyCaptureNeeded(cfg)
+	if replyCapture {
+		clientSender, err := sock.NewSenderWithMark(defaultClientMark)
+		if err != nil {
+			e.sender.Close()
+			e.tunFile.Close()
+			run("ip", "link", "del", name)
+			return err
+		}
+		e.clientSender = clientSender
+		log.Infof("TUN: reply-direction RST capture enabled (experimental; RST protection / escalation). Validate on a real device")
+	}
+
 	captureTable := routeTable - 1
 	if captureTable <= 0 {
 		captureTable = routeTable + 1
@@ -116,6 +130,8 @@ func (e *Engine) Start() error {
 	if udpLimit <= 0 {
 		udpLimit = 8
 	}
+
+	dupV4, _ := cfg.CollectDuplicateIPs()
 
 	e.routes = &routeManager{
 		tunName:      name,
@@ -131,6 +147,8 @@ func (e *Engine) Start() error {
 		udpPorts:     normalizePorts(cfg.CollectUDPPorts()),
 		tcpLimit:     tcpLimit,
 		udpLimit:     udpLimit,
+		dupIPs:       dupV4,
+		replyCapture: replyCapture,
 	}
 	if err := e.routes.setup(); err != nil {
 		e.routes.teardown()
@@ -222,7 +240,7 @@ func (e *Engine) forwardPacket(raw []byte) {
 		if len(raw) < 20 {
 			return
 		}
-		if err := e.sender.SendIPv4(raw, raw[16:20]); err != nil {
+		if err := e.senderFor(raw).SendIPv4(raw, raw[16:20]); err != nil {
 			e.logForwardError(err, net.IP(raw[12:16]).String(), net.IP(raw[16:20]).String())
 			return
 		}
@@ -233,6 +251,33 @@ func (e *Engine) forwardPacket(raw []byte) {
 		return
 	}
 	atomic.AddUint64(&e.fwdCount, 1)
+}
+
+func (e *Engine) senderFor(raw []byte) *sock.Sender {
+	if e.clientSender == nil || e.routes == nil {
+		return e.sender
+	}
+	ihl := int(raw[0]&0x0f) * 4
+	if raw[9] != 6 || len(raw) < ihl+2 {
+		return e.sender
+	}
+	sport := uint16(raw[ihl])<<8 | uint16(raw[ihl+1])
+	if portMatches(sport, e.routes.tcpPorts) {
+		return e.clientSender
+	}
+	return e.sender
+}
+
+func replyCaptureNeeded(cfg *config.Config) bool {
+	for _, set := range cfg.Sets {
+		if set == nil || !set.Enabled {
+			continue
+		}
+		if set.TCP.RSTProtection.Enabled || set.Escalate.To != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Engine) logForwardError(err error, src, dst string) {
@@ -260,6 +305,9 @@ func (e *Engine) Stop() {
 		}
 		if e.sender != nil {
 			e.sender.Close()
+		}
+		if e.clientSender != nil {
+			e.clientSender.Close()
 		}
 
 		log.Infof("TUN: engine stopped (%d packets forwarded, %d forward errors, %d ipv6 dropped)",

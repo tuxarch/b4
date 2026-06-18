@@ -48,7 +48,25 @@ func (w *Worker) InitSender() error {
 		return err
 	}
 	w.sock = s
+	if device != "" {
+		cs, err := sock.NewSenderWithMark(0)
+		if err != nil {
+			w.sock.Close()
+			w.sock = nil
+			return err
+		}
+		w.clientSock = cs
+	} else {
+		w.clientSock = s
+	}
 	return nil
+}
+
+func (w *Worker) clientSender() *sock.Sender {
+	if w.clientSock != nil {
+		return w.clientSock
+	}
+	return w.sock
 }
 
 func (w *Worker) ProcessPacket(raw []byte) engine.PacketVerdict {
