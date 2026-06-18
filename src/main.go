@@ -254,9 +254,7 @@ func runB4(cmd *cobra.Command, args []string) error {
 		}
 
 		tunEngine = b4tun.NewEngine(&cfg, pool)
-		nfq.TUNRouteFunc = tunEngine.AddRoute
 		if err := tunEngine.Start(); err != nil {
-			nfq.TUNRouteFunc = nil
 			if !cfg.System.Tables.SkipSetup {
 				tables.ClearMasqueradeOnly(&cfg)
 			}

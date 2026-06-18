@@ -32,7 +32,6 @@ type routeManager struct {
 	outGateway    string
 	mark          uint
 	routeTable    int
-	routes        []string
 	skipTables    bool
 	savedDefault  string
 	savedRPFilter string
@@ -40,9 +39,18 @@ type routeManager struct {
 	snatAdded     bool
 	notrackAdded  bool
 
-	mu      sync.Mutex
-	srcIP   string
-	current map[string]bool
+	captureTable int
+	tcpPorts     []string
+	udpPorts     []string
+	tcpLimit     int
+	udpLimit     int
+
+	mu                sync.Mutex
+	srcIP             string
+	resolvedCapture   string
+	multiport         bool
+	captureRulesAdded bool
+	captureExcl       []string
 }
 
 func (r *routeManager) setupNAT() {
@@ -137,81 +145,6 @@ func (r *routeManager) teardownForwarding() {
 	}
 }
 
-func (r *routeManager) selective() bool {
-	return len(r.routes) > 0
-}
-
-func (r *routeManager) addRoute(prefix string) bool {
-	if strings.Contains(prefix, ":") {
-		log.Warnf("TUN: IPv6 target %s not routed (IPv6 TUN routing not yet supported); traffic stays on the normal path", prefix)
-		return false
-	}
-	args := []string{"ip", "route", "replace", prefix, "dev", r.tunName}
-	if r.srcIP != "" {
-		args = append(args, "src", r.srcIP)
-	}
-	if _, err := run(args...); err != nil {
-		log.Warnf("TUN: failed to add route %s: %v", prefix, err)
-		return false
-	}
-	return true
-}
-
-func (r *routeManager) Resync(desired []string) {
-	if !r.selective() {
-		return
-	}
-	want := make(map[string]bool, len(desired))
-	for _, p := range desired {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			want[p] = true
-		}
-	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	added, removed := 0, 0
-	for p := range want {
-		if !r.current[p] {
-			if r.addRoute(p) {
-				r.current[p] = true
-				added++
-			}
-		}
-	}
-	for p := range r.current {
-		if !want[p] {
-			run("ip", "route", "del", p, "dev", r.tunName)
-			delete(r.current, p)
-			removed++
-		}
-	}
-	if added > 0 || removed > 0 {
-		log.Infof("TUN: routes resynced (+%d -%d, now %d)", added, removed, len(r.current))
-	}
-}
-
-func (r *routeManager) Add(prefix string) {
-	if !r.selective() {
-		return
-	}
-	prefix = strings.TrimSpace(prefix)
-	if prefix == "" {
-		return
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.current[prefix] {
-		return
-	}
-	if r.addRoute(prefix) {
-		r.current[prefix] = true
-		log.Tracef("TUN: learned route %s -> %s", prefix, r.tunName)
-	}
-}
-
 func (r *routeManager) setup() error {
 	out, err := run("ip", "-4", "route", "show", "default")
 	if err != nil {
@@ -234,9 +167,6 @@ func (r *routeManager) setup() error {
 		srcIP = interfacePrimaryIPv4(r.outIface)
 	}
 	r.srcIP = srcIP
-	if r.current == nil {
-		r.current = make(map[string]bool)
-	}
 
 	if _, err := run("ip", "addr", "add", r.tunAddr, "dev", r.tunName); err != nil {
 		return fmt.Errorf("ip addr add: %w", err)
@@ -275,9 +205,10 @@ func (r *routeManager) setup() error {
 		r.setupNAT()
 	}
 
+	r.resolvedCapture = r.resolveCaptureMode()
 	var capErr error
-	if r.selective() {
-		capErr = r.setupSelective(srcIP)
+	if r.resolvedCapture == "ports" {
+		capErr = r.setupPortCapture(srcIP)
 	} else {
 		capErr = r.setupDefaultCapture(srcIP)
 	}
@@ -374,30 +305,6 @@ func (r *routeManager) delFwmarkRule(markStr, tableStr string) {
 	}
 }
 
-func (r *routeManager) setupSelective(srcIP string) error {
-	if err := r.setupBypassTable(); err != nil {
-		return err
-	}
-
-	added := 0
-	for _, p := range r.routes {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
-		}
-		if r.addRoute(p) {
-			r.current[p] = true
-			added++
-		}
-	}
-	if added == 0 {
-		return fmt.Errorf("selective routing: no routes could be added")
-	}
-	log.Infof("TUN: selective routing %d/%d prefixes into %s (default route untouched, mark=0x%x table=%d)",
-		added, len(r.routes), r.tunName, r.mark, r.routeTable)
-	return nil
-}
-
 func (r *routeManager) replaceDefaultIntoTun() error {
 	args := []string{"ip", "route", "replace", "default", "dev", r.tunName}
 	if r.srcIP != "" {
@@ -439,7 +346,11 @@ func (r *routeManager) reconcile() {
 		log.Infof("TUN: uplink %s address changed %q -> %q; updating SNAT and capture source", r.outIface, r.srcIP, newIP)
 		r.removeSNAT()
 		r.srcIP = newIP
-		if !r.selective() {
+		if r.resolvedCapture == "ports" {
+			if err := r.replaceCaptureDefault(strconv.Itoa(r.captureTable)); err != nil {
+				log.Warnf("TUN: reconcile failed to refresh capture-table src: %v", err)
+			}
+		} else {
 			if err := r.replaceDefaultIntoTun(); err != nil {
 				log.Warnf("TUN: reconcile failed to refresh default-capture src: %v", err)
 			}
@@ -453,8 +364,8 @@ func (r *routeManager) reconcile() {
 		r.ensureNAT()
 	}
 	r.ensureBypass()
-	if r.selective() {
-		r.ensureSelectiveRoutes()
+	if r.resolvedCapture == "ports" {
+		r.ensurePortCapture()
 	} else {
 		r.ensureDefaultCapture()
 	}
@@ -513,12 +424,6 @@ func (r *routeManager) ensureDefaultCapture() {
 	}
 }
 
-func (r *routeManager) ensureSelectiveRoutes() {
-	for p := range r.current {
-		r.addRoute(p)
-	}
-}
-
 func interfacePrimaryIPv4(iface string) string {
 	out, err := run("ip", "-4", "-o", "addr", "show", "dev", iface, "scope", "global")
 	if err != nil {
@@ -549,7 +454,11 @@ func (r *routeManager) teardown() {
 	markStr := fmt.Sprintf("0x%x", r.mark)
 	tableStr := fmt.Sprintf("%d", r.routeTable)
 
-	if !r.selective() && r.savedDefault != "" {
+	if r.resolvedCapture == "ports" {
+		r.teardownPortCapture()
+	}
+
+	if r.resolvedCapture == "default" && r.savedDefault != "" {
 		args := append([]string{"ip", "route", "replace"}, strings.Fields(r.savedDefault)...)
 		if _, err := run(args...); err != nil {
 			log.Errorf("TUN: failed to restore default route: %v", err)

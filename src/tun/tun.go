@@ -3,7 +3,6 @@ package tun
 import (
 	"net"
 	"os"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -51,49 +50,8 @@ func (e *Engine) config() *config.Config {
 	return e.cfg.Load()
 }
 
-func (e *Engine) AddRoute(ip net.IP) {
-	if ip == nil || e.routes == nil {
-		return
-	}
-	select {
-	case <-e.quit:
-		return
-	default:
-	}
-	e.routes.Add(ip.String())
-}
-
 func (e *Engine) UpdateConfig(cfg *config.Config) {
 	e.cfg.Store(cfg)
-	if e.routes != nil {
-		e.routes.Resync(e.collectRoutes())
-	}
-}
-
-func (e *Engine) collectRoutes() []string {
-	seen := make(map[string]bool)
-	var out []string
-	add := func(s string) {
-		s = strings.TrimSpace(s)
-		if s == "" || seen[s] {
-			return
-		}
-		seen[s] = true
-		out = append(out, s)
-	}
-	cfg := e.config()
-	for _, p := range cfg.Queue.TUN.Routes {
-		add(p)
-	}
-	for _, set := range cfg.Sets {
-		if set == nil || !set.Enabled {
-			continue
-		}
-		for _, ip := range set.Targets.IpsToMatch {
-			add(ip)
-		}
-	}
-	return out
 }
 
 func (e *Engine) Start() error {
@@ -145,24 +103,34 @@ func (e *Engine) Start() error {
 	}
 	e.sender = sender
 
-	routes := e.collectRoutes()
-	if len(routes) > 0 {
-		log.Infof("TUN: selective mode - %d target prefixes from config+sets", len(routes))
-	} else {
-		log.Infof("TUN: no target prefixes - capturing the whole default route")
+	captureTable := routeTable - 1
+	if captureTable <= 0 {
+		captureTable = routeTable + 1
+	}
+
+	tcpLimit := cfg.Queue.TCPConnBytesLimit
+	if tcpLimit <= 0 {
+		tcpLimit = 19
+	}
+	udpLimit := cfg.Queue.UDPConnBytesLimit
+	if udpLimit <= 0 {
+		udpLimit = 8
 	}
 
 	e.routes = &routeManager{
-		tunName:    name,
-		tunAddr:    address,
-		tunAddrV6:  tunCfg.AddressV6,
-		outIface:   tunCfg.OutInterface,
-		outGateway: tunCfg.OutGateway,
-		mark:       cfg.Queue.Mark,
-		routeTable: routeTable,
-		routes:     routes,
-		skipTables: cfg.System.Tables.SkipSetup,
-		current:    make(map[string]bool),
+		tunName:      name,
+		tunAddr:      address,
+		tunAddrV6:    tunCfg.AddressV6,
+		outIface:     tunCfg.OutInterface,
+		outGateway:   tunCfg.OutGateway,
+		mark:         cfg.Queue.Mark,
+		routeTable:   routeTable,
+		skipTables:   cfg.System.Tables.SkipSetup,
+		captureTable: captureTable,
+		tcpPorts:     normalizePorts(cfg.CollectTCPPorts()),
+		udpPorts:     normalizePorts(cfg.CollectUDPPorts()),
+		tcpLimit:     tcpLimit,
+		udpLimit:     udpLimit,
 	}
 	if err := e.routes.setup(); err != nil {
 		e.routes.teardown()

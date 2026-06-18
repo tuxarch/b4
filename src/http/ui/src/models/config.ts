@@ -162,7 +162,6 @@ export interface TUNConfig {
   out_interface?: string;
   out_gateway?: string;
   route_table?: number;
-  routes?: string[];
 }
 
 export interface Device {

@@ -350,7 +350,6 @@ func (w *Worker) handleTCPPacket(vc *verdictCtx, pkt *pktInfo, cfg *config.Confi
 					set = stSNI
 					matcher.LearnIPToDomain(pkt.dst, host, stSNI)
 					registerLearnedRoute(cfg, stSNI, pkt.dst)
-					registerTUNRoute(pkt.dst)
 				}
 			}
 		}
@@ -645,7 +644,6 @@ func (w *Worker) handleUDPPacket(vc *verdictCtx, pkt *pktInfo, cfg *config.Confi
 				sniTarget = sniSet.Name
 				matcher.LearnIPToDomain(pkt.dst, host, sniSet)
 				registerLearnedRoute(cfg, sniSet, pkt.dst)
-				registerTUNRoute(pkt.dst)
 			}
 		}
 	}

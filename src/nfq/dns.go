@@ -217,11 +217,6 @@ func (w *Worker) processDnsPacket(vc *verdictCtx, ipVersion byte, sport uint16, 
 				clientMac := w.getMacByIp(clientIP.String())
 				if matched, set := w.getMatcher().MatchSNIWithSource(domain, clientMac); matched && set.Enabled {
 					ips := dns.ParseResponseIPs(payload)
-					if TUNRouteFunc != nil {
-						for _, ip := range ips {
-							registerTUNRoute(ip)
-						}
-					}
 					if set.Routing.Enabled && len(ips) > 0 {
 						cfg := w.getConfig()
 						if RoutingHandleDNSFunc != nil && !cfg.Queue.IsDiscovery {
@@ -280,12 +275,6 @@ func (w *Worker) resolveDNSRedirect(ipVersion byte, set *config.SetConfig, cfg *
 	if set.Routing.Enabled && !cfg.Queue.IsDiscovery && RoutingHandleDNSFunc != nil {
 		if ips := dns.ParseResponseIPs(resp); len(ips) > 0 {
 			RoutingHandleDNSFunc(cfg, set, ips)
-		}
-	}
-
-	if TUNRouteFunc != nil {
-		for _, ip := range dns.ParseResponseIPs(resp) {
-			registerTUNRoute(ip)
 		}
 	}
 

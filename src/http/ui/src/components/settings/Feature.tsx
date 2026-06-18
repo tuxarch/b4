@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ToggleOnIcon } from "@b4.icons";
 import { B4Config } from "@models/config";
@@ -11,9 +10,7 @@ import {
   B4Alert,
   B4Badge,
   B4TextField,
-  B4ChipList,
 } from "@b4.elements";
-import SettingAutocomplete from "@common/B4Autocomplete";
 import { Box, Typography } from "@mui/material";
 import { SettingsPropHandlerType } from "@models/settings";
 
@@ -24,20 +21,6 @@ interface FeatureSettingsProps {
 
 export const FeatureSettings = ({ config, onChange }: FeatureSettingsProps) => {
   const { t } = useTranslation();
-  const [newRoute, setNewRoute] = useState("");
-
-  const tunRoutes = config.queue.tun?.routes ?? [];
-  const addTunRoute = (value: string) => {
-    const r = value.trim();
-    if (!r || tunRoutes.includes(r)) return;
-    onChange("queue.tun.routes", [...tunRoutes, r]);
-  };
-  const removeTunRoute = (value: string) => {
-    onChange(
-      "queue.tun.routes",
-      tunRoutes.filter((x) => x !== value),
-    );
-  };
 
   const handleInterfaceToggle = (iface: string) => {
     const current = config.queue.interfaces || [];
@@ -142,25 +125,6 @@ export const FeatureSettings = ({ config, onChange }: FeatureSettingsProps) => {
               {t("settings.Feature.tunOutInterfaceRequired")}
             </B4Alert>
           )}
-        </B4FormGroup>
-      )}
-      {config.queue.mode === "tun" && (
-        <B4FormGroup label={t("settings.Feature.tunRoutes")} columns={1}>
-          <SettingAutocomplete
-            label={t("settings.Feature.tunRoutes")}
-            value={newRoute}
-            options={[]}
-            onChange={setNewRoute}
-            onSelect={addTunRoute}
-            placeholder={t("settings.Feature.tunRoutesPlaceholder")}
-            helperText={t("settings.Feature.tunRoutesHelp")}
-          />
-          <B4ChipList
-            items={tunRoutes}
-            getKey={(c) => c}
-            getLabel={(c) => c}
-            onDelete={removeTunRoute}
-          />
         </B4FormGroup>
       )}
       {config.queue.mode !== "tun" && (

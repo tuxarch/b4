@@ -14,14 +14,6 @@ var RoutingHandleDNSFunc func(cfg *config.Config, set *config.SetConfig, ips []n
 
 var RoutingLearnIPFunc func(cfg *config.Config, set *config.SetConfig, ip net.IP)
 
-var TUNRouteFunc func(ip net.IP)
-
-func registerTUNRoute(dst net.IP) {
-	if TUNRouteFunc != nil && dst != nil {
-		TUNRouteFunc(dst)
-	}
-}
-
 func registerEscalatedRoute(cfg *config.Config, escSet *config.SetConfig, dst net.IP) {
 	if cfg == nil || escSet == nil || dst == nil || !escSet.Routing.Enabled || RoutingHandleDNSFunc == nil {
 		return
