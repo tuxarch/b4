@@ -96,7 +96,7 @@ func (e *Engine) Start() error {
 	e.tunName = name
 	log.Infof("TUN: opened device %s", name)
 
-	sender, err := sock.NewSenderWithMarkDevice(int(cfg.Queue.Mark), tunCfg.OutInterface)
+	sender, err := sock.NewSenderWithMarkDevice(int(cfg.Queue.Mark)|engine.ReinjectMarkBit, tunCfg.OutInterface)
 	if err != nil {
 		e.tunFile.Close()
 		run("ip", "link", "del", name)

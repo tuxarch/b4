@@ -8,9 +8,14 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/daniellavrushin/b4/engine"
 	"github.com/daniellavrushin/b4/log"
 	"github.com/daniellavrushin/b4/tables"
 )
+
+func reinjectMarkMatch() string {
+	return fmt.Sprintf("0x%x/0x%x", engine.ReinjectMarkBit, engine.ReinjectMarkBit)
+}
 
 func interfaceMTU(iface string) int {
 	b, err := os.ReadFile("/sys/class/net/" + iface + "/mtu")
@@ -56,7 +61,7 @@ type routeManager struct {
 }
 
 func (r *routeManager) setupNAT() {
-	markStr := fmt.Sprintf("0x%x", r.mark)
+	markStr := reinjectMarkMatch()
 
 	if r.srcIP != "" {
 		snat := []string{"-o", r.tunName, "-j", "SNAT", "--to-source", r.srcIP}
@@ -102,7 +107,7 @@ func (r *routeManager) removeSNAT() {
 func (r *routeManager) teardownNAT() {
 	r.removeSNAT()
 	if r.notrackAdded {
-		markStr := fmt.Sprintf("0x%x", r.mark)
+		markStr := reinjectMarkMatch()
 		for {
 			if _, err := run("iptables", "-t", "raw", "-D", "OUTPUT", "-m", "mark", "--mark", markStr, "-j", "CT", "--notrack"); err != nil {
 				break
@@ -386,7 +391,7 @@ func (r *routeManager) ensureNAT() {
 		}
 	}
 	if r.notrackAdded {
-		markStr := fmt.Sprintf("0x%x", r.mark)
+		markStr := reinjectMarkMatch()
 		notrack := []string{"-m", "mark", "--mark", markStr, "-j", "CT", "--notrack"}
 		if _, err := run(append([]string{"iptables", "-t", "raw", "-C", "OUTPUT"}, notrack...)...); err != nil {
 			if _, err := run(append([]string{"iptables", "-t", "raw", "-A", "OUTPUT"}, notrack...)...); err == nil {

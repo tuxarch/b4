@@ -1,5 +1,7 @@
 package engine
 
+const ReinjectMarkBit = 0x800000
+
 type PacketVerdict int
 
 const (

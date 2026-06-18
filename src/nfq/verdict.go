@@ -40,10 +40,12 @@ func (w *Worker) InitSender() error {
 	}
 	cfg := w.getConfig()
 	device := ""
+	reinjectMark := int(cfg.Queue.Mark)
 	if cfg.Queue.Mode == "tun" {
 		device = cfg.Queue.TUN.OutInterface
+		reinjectMark |= engine.ReinjectMarkBit
 	}
-	s, err := sock.NewSenderWithMarkDevice(int(cfg.Queue.Mark), device)
+	s, err := sock.NewSenderWithMarkDevice(reinjectMark, device)
 	if err != nil {
 		return err
 	}
