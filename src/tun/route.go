@@ -153,6 +153,12 @@ func (r *routeManager) teardownForwarding() {
 }
 
 func (r *routeManager) setup() error {
+	if !r.skipTables {
+		if _, err := exec.LookPath("iptables"); err != nil {
+			return fmt.Errorf("TUN mode needs the iptables binary (or the iptables-nft compat shim) for its SNAT/FORWARD/NOTRACK/capture rules, but it was not found (%w); this looks like an nft-only system. Install iptables/iptables-nft, or run with --skip-tables and manage NAT/forwarding yourself. Native nftables rules for TUN are a planned follow-up", err)
+		}
+	}
+
 	out, err := run("ip", "-4", "route", "show", "default")
 	if err != nil {
 		return fmt.Errorf("failed to read current default route: %w", err)
