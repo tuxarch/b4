@@ -260,6 +260,8 @@ func runB4(cmd *cobra.Command, args []string) error {
 		if err := tunEngine.Start(); err != nil {
 			if !cfg.System.Tables.SkipSetup {
 				tables.ClearMasqueradeOnly(&cfg)
+				tables.ClearMSSClampOnly(&cfg)
+				tables.RevertConntrackSysctls()
 			}
 			pool.Stop()
 			metrics.RecordEvent("error", fmt.Sprintf("TUN engine start failed: %v", err))
