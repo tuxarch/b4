@@ -258,7 +258,7 @@ func (e *Engine) senderFor(raw []byte) *sock.Sender {
 		return e.sender
 	}
 	ihl := int(raw[0]&0x0f) * 4
-	if raw[9] != 6 || len(raw) < ihl+2 {
+	if ihl < 20 || raw[9] != 6 || len(raw) < ihl+2 {
 		return e.sender
 	}
 	sport := uint16(raw[ihl])<<8 | uint16(raw[ihl+1])
