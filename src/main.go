@@ -157,6 +157,8 @@ func runB4(cmd *cobra.Command, args []string) error {
 			return nil
 		}
 		if c.Queue.Mode == "tun" {
+			tproxyMgr.SyncConfig(c)
+			tables.RoutingSyncConfig(c)
 			return nil
 		}
 		if discoveryRT.IsActive() {
@@ -271,6 +273,11 @@ func runB4(cmd *cobra.Command, args []string) error {
 		}
 		metrics.NFQueueStatus = "active (tun)"
 		metrics.RecordEvent("info", fmt.Sprintf("TUN engine started with %d threads", cfg.Queue.Threads))
+
+		if !cfg.System.Tables.SkipSetup {
+			tproxyMgr.SyncConfig(&cfg)
+			tables.RoutingSyncConfig(&cfg)
+		}
 	} else {
 		// Setup iptables/nftables rules
 		if !cfg.System.Tables.SkipSetup {
@@ -361,7 +368,7 @@ func runB4(cmd *cobra.Command, args []string) error {
 		mtprotoBridge.UpdateConfig(c)
 		startCFRefresh(c)
 		tproxyResolver.Set(pool.GetMatcher())
-		if tunEngine == nil && !c.System.Tables.SkipSetup {
+		if !c.System.Tables.SkipSetup {
 			tproxyMgr.SyncConfig(c)
 			tables.RoutingSyncConfig(c)
 		}
