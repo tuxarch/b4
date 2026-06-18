@@ -212,18 +212,29 @@ func (w *Worker) processDnsPacket(vc *verdictCtx, ipVersion byte, sport uint16, 
 				dnsServerIP = net.IP(raw[8:24])
 			}
 
-			if TUNRouteFunc != nil && domain != "" {
+			routed := false
+			if domain != "" {
 				clientMac := w.getMacByIp(clientIP.String())
 				if matched, set := w.getMatcher().MatchSNIWithSource(domain, clientMac); matched && set.Enabled {
-					for _, ip := range dns.ParseResponseIPs(payload) {
-						registerTUNRoute(ip)
+					ips := dns.ParseResponseIPs(payload)
+					if TUNRouteFunc != nil {
+						for _, ip := range ips {
+							registerTUNRoute(ip)
+						}
+					}
+					if set.Routing.Enabled && len(ips) > 0 {
+						cfg := w.getConfig()
+						if RoutingHandleDNSFunc != nil && !cfg.Queue.IsDiscovery {
+							RoutingHandleDNSFunc(cfg, set, ips)
+							routed = true
+						}
 					}
 				}
 			}
 
 			if setID, hit := consumeDNSPendingRoute(
 				dnsRouteKeyResponse(ipVersion, clientIP, dport, dnsServerIP, sport, txid, domain),
-			); hit {
+			); hit && !routed {
 				if ips := dns.ParseResponseIPs(payload); len(ips) > 0 {
 					cfg := w.getConfig()
 					if set := cfg.GetSetById(setID); set != nil {
