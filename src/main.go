@@ -199,8 +199,12 @@ func runB4(cmd *cobra.Command, args []string) error {
 
 	if clearTables {
 		log.Infof("Clearing iptables rules as requested (--clear-iptables)")
-		tables.ClearRules(&cfg)
+		clearErr := tables.ClearRules(&cfg)
 		tables.RoutingClearAll()
+		b4tun.ClearStaleArtifacts(&cfg)
+		if clearErr != nil {
+			return fmt.Errorf("failed to clear iptables/nftables rules: %w", clearErr)
+		}
 		log.Infof("IPTables rules cleared successfully")
 		return nil
 	}
@@ -244,6 +248,10 @@ func runB4(cmd *cobra.Command, args []string) error {
 			cfg.Queue.TUN.DeviceName, cfg.Queue.TUN.OutInterface, cfg.Queue.Threads)
 
 		if !cfg.System.Tables.SkipSetup {
+			log.Tracef("Clearing any pre-existing NFQUEUE/tables rules before TUN setup")
+			if err := tables.ClearRules(&cfg); err != nil {
+				log.Warnf("TUN: failed to clear pre-existing tables rules (continuing): %v", err)
+			}
 			if err := tables.ApplyMasqueradeOnly(&cfg); err != nil {
 				metrics.RecordEvent("error", fmt.Sprintf("Failed to apply masquerade: %v", err))
 				return fmt.Errorf("failed to apply masquerade: %w", err)
@@ -286,6 +294,7 @@ func runB4(cmd *cobra.Command, args []string) error {
 		if !cfg.System.Tables.SkipSetup {
 			log.Tracef("Clearing existing iptables/nftables rules")
 			tables.ClearRules(&cfg)
+			b4tun.ClearStaleArtifacts(&cfg)
 
 			log.Tracef("Adding tables rules")
 			if err := tables.AddRules(&cfg); err != nil {
