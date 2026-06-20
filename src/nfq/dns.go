@@ -13,6 +13,7 @@ import (
 	"github.com/daniellavrushin/b4/log"
 	"github.com/daniellavrushin/b4/metrics"
 	"github.com/daniellavrushin/b4/sock"
+	"github.com/florianl/go-nfqueue"
 )
 
 const dohRedirectTimeout = 5 * time.Second
@@ -36,6 +37,7 @@ func getDoHClient(mark int) *http.Client {
 	return dohClient
 }
 
+// parseDNSName parses a DNS domain name from msg starting at the given offset.
 func parseDNSName(msg []byte, offset int) (string, bool) {
 	if offset < 0 || offset >= len(msg) {
 		return "", false
@@ -78,7 +80,7 @@ func parseDNSName(msg []byte, offset int) (string, bool) {
 	return strings.Join(labels, "."), true
 }
 
-func (w *Worker) processDnsPacket(vc *verdictCtx, ipVersion byte, sport uint16, dport uint16, payload []byte, raw []byte, srcMac string) int {
+func (w *Worker) processDnsPacket(ipVersion byte, sport uint16, dport uint16, payload []byte, raw []byte, id uint32, srcMac string) int {
 
 	if dport == 53 {
 		domain, ok := dns.ParseQueryDomain(payload)
@@ -93,7 +95,9 @@ func (w *Worker) processDnsPacket(vc *verdictCtx, ipVersion byte, sport uint16, 
 				if set.Routing.Enabled && config.RoutingIsBlock(set.Routing.Mode) && !cfg.Queue.IsDiscovery {
 					if config.NormalizeBlockAction(set.Routing.BlockAction) == config.BlockActionDrop {
 						metrics.GetMetricsCollector().RecordBlock(domain, srcMac)
-						vc.drop()
+						if err := w.q.SetVerdict(id, nfqueue.NfDrop); err != nil {
+							log.Tracef("failed to set drop verdict on packet %d: %v", id, err)
+						}
 						return 0
 					}
 					ipv6Disabled := ipVersion == IPv6 && !cfg.Queue.IPv6Enabled
@@ -110,14 +114,16 @@ func (w *Worker) processDnsPacket(vc *verdictCtx, ipVersion byte, sport uint16, 
 							}
 							if ipVersion == IPv4 {
 								if pkt := sock.BuildUDPPacketV4(originalDst, clientIP, 53, sport, resp); pkt != nil {
-									_ = w.clientSender().SendIPv4(pkt, clientIP)
+									_ = w.sock.SendIPv4(pkt, clientIP)
 								}
 							} else if pkt := sock.BuildUDPPacketV6(originalDst, clientIP, 53, sport, resp); pkt != nil {
-								_ = w.clientSender().SendIPv6(pkt, clientIP)
+								_ = w.sock.SendIPv6(pkt, clientIP)
 							}
 							log.Tracef("DNS sinkhole: %s -> NXDOMAIN for %s (set: %s)", domain, clientIP, set.Name)
 							metrics.GetMetricsCollector().RecordBlock(domain, srcMac)
-							vc.drop()
+							if err := w.q.SetVerdict(id, nfqueue.NfDrop); err != nil {
+								log.Tracef("failed to set drop verdict on packet %d: %v", id, err)
+							}
 							return 0
 						}
 					}
@@ -145,19 +151,28 @@ func (w *Worker) processDnsPacket(vc *verdictCtx, ipVersion byte, sport uint16, 
 
 				if !(set.DNS.Enabled && (set.DNS.TargetDNS != "" || useDoH)) {
 					log.Tracef("DNS redirect: %s matched set %s but no redirect target configured, passing through", domain, set.Name)
-					return vc.accept()
+					if err := w.q.SetVerdict(id, nfqueue.NfAccept); err != nil {
+						log.Tracef("failed to set verdict on packet %d: %v", id, err)
+					}
+					return 0
 				}
 
 				var targetIP net.IP
 				if !useDoH {
 					targetIP = net.ParseIP(set.DNS.TargetDNS)
 					if targetIP == nil {
-						return vc.accept()
+						if err := w.q.SetVerdict(id, nfqueue.NfAccept); err != nil {
+							log.Tracef("failed to set verdict on packet %d: %v", id, err)
+						}
+						return 0
 					}
 				}
 
 				if ipVersion == IPv6 && !cfg.Queue.IPv6Enabled {
-					return vc.accept()
+					if err := w.q.SetVerdict(id, nfqueue.NfAccept); err != nil {
+						log.Tracef("failed to set verdict on packet %d: %v", id, err)
+					}
+					return 0
 				}
 
 				var clientIP, originalDst net.IP
@@ -181,7 +196,9 @@ func (w *Worker) processDnsPacket(vc *verdictCtx, ipVersion byte, sport uint16, 
 				}
 				log.Tracef("DNS redirect: intercepting %s -> %s (set %s)", domain, target, set.Name)
 
-				vc.drop()
+				if err := w.q.SetVerdict(id, nfqueue.NfDrop); err != nil {
+					log.Tracef("failed to set drop verdict on packet %d: %v", id, err)
+				}
 
 				w.wg.Add(1)
 				go func(s *config.SetConfig, c *config.Config) {
@@ -212,24 +229,9 @@ func (w *Worker) processDnsPacket(vc *verdictCtx, ipVersion byte, sport uint16, 
 				dnsServerIP = net.IP(raw[8:24])
 			}
 
-			routed := false
-			if domain != "" {
-				clientMac := w.getMacByIp(clientIP.String())
-				if matched, set := w.getMatcher().MatchSNIWithSource(domain, clientMac); matched && set.Enabled {
-					ips := dns.ParseResponseIPs(payload)
-					if set.Routing.Enabled && len(ips) > 0 {
-						cfg := w.getConfig()
-						if RoutingHandleDNSFunc != nil && !cfg.Queue.IsDiscovery {
-							RoutingHandleDNSFunc(cfg, set, ips)
-							routed = true
-						}
-					}
-				}
-			}
-
 			if setID, hit := consumeDNSPendingRoute(
 				dnsRouteKeyResponse(ipVersion, clientIP, dport, dnsServerIP, sport, txid, domain),
-			); hit && !routed {
+			); hit {
 				if ips := dns.ParseResponseIPs(payload); len(ips) > 0 {
 					cfg := w.getConfig()
 					if set := cfg.GetSetById(setID); set != nil {
@@ -242,7 +244,10 @@ func (w *Worker) processDnsPacket(vc *verdictCtx, ipVersion byte, sport uint16, 
 		}
 	}
 
-	return vc.accept()
+	if err := w.q.SetVerdict(id, nfqueue.NfAccept); err != nil {
+		log.Tracef("failed to set verdict on packet %d: %v", id, err)
+	}
+	return 0
 }
 
 func (w *Worker) resolveDNSRedirect(ipVersion byte, set *config.SetConfig, cfg *config.Config, query []byte, clientIP net.IP, clientPort uint16, originalDst, targetIP net.IP, delay int) {
@@ -285,17 +290,19 @@ func (w *Worker) resolveDNSRedirect(ipVersion byte, set *config.SetConfig, cfg *
 	log.Tracef("DNS redirect: %s -> %s answered for %s with %d IPs (set: %s)", originalDst, upstream, clientIP, len(dns.ParseResponseIPs(resp)), set.Name)
 }
 
+// sendDNSResponseToClient crafts a UDP DNS reply (server -> client) and sends it
+// over the raw socket. No-op when resp is nil (unparseable query).
 func (w *Worker) sendDNSResponseToClient(ipVersion byte, originalDst, clientIP net.IP, clientPort uint16, resp []byte) {
 	if len(resp) == 0 {
 		return
 	}
 	if ipVersion == IPv4 {
 		if pkt := sock.BuildUDPPacketV4(originalDst, clientIP, 53, clientPort, resp); pkt != nil {
-			_ = w.clientSender().SendIPv4(pkt, clientIP)
+			_ = w.sock.SendIPv4(pkt, clientIP)
 		}
 	} else {
 		if pkt := sock.BuildUDPPacketV6(originalDst, clientIP, 53, clientPort, resp); pkt != nil {
-			_ = w.clientSender().SendIPv6(pkt, clientIP)
+			_ = w.sock.SendIPv6(pkt, clientIP)
 		}
 	}
 }

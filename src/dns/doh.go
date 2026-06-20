@@ -28,9 +28,9 @@ func MarkedDoHClient(mark int, timeout time.Duration) *http.Client {
 		MaxIdleConns:          100,
 		IdleConnTimeout:       30 * time.Second,
 	}
-	var control func(string, string, syscall.RawConn) error
+	d := &net.Dialer{Timeout: timeout}
 	if mark != 0 {
-		control = func(_, _ string, c syscall.RawConn) error {
+		d.Control = func(_, _ string, c syscall.RawConn) error {
 			var serr error
 			if cerr := c.Control(func(fd uintptr) {
 				serr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_MARK, mark)
@@ -39,14 +39,6 @@ func MarkedDoHClient(mark int, timeout time.Duration) *http.Client {
 			}
 			return serr
 		}
-	}
-	d := &net.Dialer{Timeout: timeout, Control: control}
-	d.Resolver = &net.Resolver{
-		PreferGo: true,
-		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-			bd := &net.Dialer{Timeout: timeout, Control: control}
-			return bd.DialContext(ctx, network, address)
-		},
 	}
 	tr.DialContext = d.DialContext
 	return &http.Client{Transport: tr, Timeout: timeout}

@@ -141,7 +141,6 @@ export interface UdpConfig {
   seg2delay_max: number;
 }
 export interface QueueConfig {
-  mode?: string;
   start_num: number;
   threads: number;
   mark: number;
@@ -152,16 +151,6 @@ export interface QueueConfig {
   interfaces: string[];
   devices: DevicesConfig;
   mss_clamp: MSSClampConfig;
-  tun?: TUNConfig;
-}
-
-export interface TUNConfig {
-  device_name?: string;
-  address?: string;
-  address_v6?: string;
-  out_interface?: string;
-  out_gateway?: string;
-  route_table?: number;
 }
 
 export interface Device {
@@ -250,7 +239,6 @@ export interface WebServerConfig {
   tls_key: string;
   username: string;
   password: string;
-  password_set?: boolean;
   language: string;
 }
 export interface TableConfig {

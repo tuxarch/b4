@@ -250,16 +250,6 @@ func (c *Config) Validate() error {
 		return v.result()
 	}
 
-	if c.Queue.Mode != "" && c.Queue.Mode != "nfqueue" && c.Queue.Mode != "tun" {
-		v.add("queue.mode", "invalid", "queue mode must be 'nfqueue' or 'tun'", nil)
-		return v.result()
-	}
-
-	if c.Queue.Mode == "tun" && c.Queue.TUN.OutInterface == "" {
-		v.add("queue.tun.out_interface", "required", "tun out_interface is required in TUN mode (e.g. eth0, wan0, l2tp-vpn)", nil)
-		return v.result()
-	}
-
 	if c.Queue.StartNum < 0 || c.Queue.StartNum > 65535 {
 		v.add("queue.start_num", "out_of_range", "queue-num must be between 0 and 65535", nil)
 		return v.result()

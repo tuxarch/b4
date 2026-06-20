@@ -30,7 +30,6 @@ import (
 	"github.com/daniellavrushin/b4/socks5"
 	"github.com/daniellavrushin/b4/tables"
 	"github.com/daniellavrushin/b4/tproxy"
-	b4tun "github.com/daniellavrushin/b4/tun"
 	"github.com/daniellavrushin/b4/watchdog"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -156,11 +155,6 @@ func runB4(cmd *cobra.Command, args []string) error {
 		if c.System.Tables.SkipSetup {
 			return nil
 		}
-		if c.Queue.Mode == "tun" {
-			tproxyMgr.SyncConfig(c)
-			tables.RoutingSyncConfig(c)
-			return nil
-		}
 		if discoveryRT.IsActive() {
 			log.Warnf("Tables refresh requested while discovery is active, waiting for discovery to finish...")
 			deadline := time.After(5 * time.Minute)
@@ -232,100 +226,51 @@ func runB4(cmd *cobra.Command, args []string) error {
 	log.Infof("Loaded targets: %d domains, %d IPs across %d sets", totalDomains, totalIps, len(cfg.Sets))
 	tables.RoutingClearAll()
 
-	isTUN := cfg.Queue.Mode == "tun"
+	// Setup iptables/nftables rules
+	if !cfg.System.Tables.SkipSetup {
+		log.Tracef("Clearing existing iptables/nftables rules")
+		tables.ClearRules(&cfg)
 
-	pool := nfq.NewPool(&cfg)
-
-	var tunEngine *b4tun.Engine
-	var tablesMonitor *tables.Monitor
-
-	if isTUN {
-		log.Infof("Starting TUN engine (device: %s, out: %s, threads: %d)",
-			cfg.Queue.TUN.DeviceName, cfg.Queue.TUN.OutInterface, cfg.Queue.Threads)
-
-		if !cfg.System.Tables.SkipSetup {
-			if err := tables.ApplyMasqueradeOnly(&cfg); err != nil {
-				metrics.RecordEvent("error", fmt.Sprintf("Failed to apply masquerade: %v", err))
-				return fmt.Errorf("failed to apply masquerade: %w", err)
-			}
-			tables.ApplyConntrackSysctls()
-			if err := tables.ApplyMSSClampOnly(&cfg); err != nil {
-				log.Errorf("Failed to apply MSS clamp in TUN mode: %v", err)
-			}
-		} else {
-			log.Infof("Skipping masquerade and conntrack sysctls (--skip-tables); the TUN engine also skips its own firewall/sysctl rules and only sets up routing")
+		log.Tracef("Adding tables rules")
+		if err := tables.AddRules(&cfg); err != nil {
+			metrics.RecordEvent("error", fmt.Sprintf("Failed to add tables rules: %v", err))
+			return fmt.Errorf("failed to add tables rules: %w", err)
 		}
-
-		tunEngine = b4tun.NewEngine(&cfg, pool)
-		if err := tunEngine.Start(); err != nil {
-			if !cfg.System.Tables.SkipSetup {
-				tables.ClearMasqueradeOnly(&cfg)
-				tables.ClearMSSClampOnly(&cfg)
-				tables.RevertConntrackSysctls()
-			}
-			pool.Stop()
-			metrics.RecordEvent("error", fmt.Sprintf("TUN engine start failed: %v", err))
-			metrics.NFQueueStatus = "error"
-			return fmt.Errorf("TUN engine start failed: %w", err)
-		}
-
-		if cfg.System.Tables.SkipSetup {
-			metrics.TablesStatus = "tun (skip-tables)"
-		} else {
-			metrics.TablesStatus = "tun"
-		}
-		metrics.NFQueueStatus = "active (tun)"
-		metrics.RecordEvent("info", fmt.Sprintf("TUN engine started with %d threads", cfg.Queue.Threads))
-
-		if !cfg.System.Tables.SkipSetup {
-			tproxyMgr.SyncConfig(&cfg)
-			tables.RoutingSyncConfig(&cfg)
-		}
+		metrics.TablesStatus = tables.DetectBackend(&cfg)
+		metrics.RecordEvent("info", "Tables rules configured successfully")
 	} else {
-		// Setup iptables/nftables rules
-		if !cfg.System.Tables.SkipSetup {
-			log.Tracef("Clearing existing iptables/nftables rules")
-			tables.ClearRules(&cfg)
-
-			log.Tracef("Adding tables rules")
-			if err := tables.AddRules(&cfg); err != nil {
-				metrics.RecordEvent("error", fmt.Sprintf("Failed to add tables rules: %v", err))
-				return fmt.Errorf("failed to add tables rules: %w", err)
-			}
-			metrics.TablesStatus = tables.DetectBackend(&cfg)
-			metrics.RecordEvent("info", "Tables rules configured successfully")
-		} else {
-			log.Infof("Skipping tables setup (--skip-tables)")
-			metrics.TablesStatus = "skipped"
-		}
-
-		// Ensure routing runtime state is applied at startup as well.
-		if !cfg.System.Tables.SkipSetup {
-			tproxyMgr.SyncConfig(&cfg)
-			tables.RoutingSyncConfig(&cfg)
-		} else {
-			log.Tracef("Skipping routing sync due to --skip-tables")
-		}
-
-		// Start netfilter queue pool
-		log.Infof("Starting netfilter queue pool (queue: %d, threads: %d)", cfg.Queue.StartNum, cfg.Queue.Threads)
-		if err := pool.Start(); err != nil {
-			metrics.RecordEvent("error", fmt.Sprintf("NFQueue start failed: %v", err))
-			metrics.NFQueueStatus = "error"
-			return fmt.Errorf("netfilter queue start failed: %w", err)
-		}
-
-		metrics.RecordEvent("info", fmt.Sprintf("NFQueue started with %d threads", cfg.Queue.Threads))
-		metrics.NFQueueStatus = "active"
-
-		// Start tables monitor to handle rule restoration if system wipes them
-		if !cfg.System.Tables.SkipSetup && cfg.System.Tables.MonitorInterval > 0 {
-			tablesMonitor = tables.NewMonitor(&cfgPtr)
-			tablesMonitor.Start()
-		}
+		log.Infof("Skipping tables setup (--skip-tables)")
+		metrics.TablesStatus = "skipped"
 	}
 
+	// Ensure routing runtime state is applied at startup as well.
+	if !cfg.System.Tables.SkipSetup {
+		tproxyMgr.SyncConfig(&cfg)
+		tables.RoutingSyncConfig(&cfg)
+	} else {
+		log.Tracef("Skipping routing sync due to --skip-tables")
+	}
+
+	// Start netfilter queue pool
+	log.Infof("Starting netfilter queue pool (queue: %d, threads: %d)", cfg.Queue.StartNum, cfg.Queue.Threads)
+	pool := nfq.NewPool(&cfg)
+	if err := pool.Start(); err != nil {
+		metrics.RecordEvent("error", fmt.Sprintf("NFQueue start failed: %v", err))
+		metrics.NFQueueStatus = "error"
+		return fmt.Errorf("netfilter queue start failed: %w", err)
+	}
+
+	metrics.RecordEvent("info", fmt.Sprintf("NFQueue started with %d threads", cfg.Queue.Threads))
+	metrics.NFQueueStatus = "active"
+
 	tproxyResolver.Set(pool.GetMatcher())
+
+	// Start tables monitor to handle rule restoration if system wipes them
+	var tablesMonitor *tables.Monitor
+	if !cfg.System.Tables.SkipSetup && cfg.System.Tables.MonitorInterval > 0 {
+		tablesMonitor = tables.NewMonitor(&cfgPtr)
+		tablesMonitor.Start()
+	}
 
 	// Start internal web server if configured
 	httpServer, apiHandler, err := b4http.StartServer(&cfgPtr, pool)
@@ -360,9 +305,6 @@ func runB4(cmd *cobra.Command, args []string) error {
 				return fmt.Errorf("failed to update pool config: %v", err)
 			}
 		}
-		if tunEngine != nil {
-			tunEngine.UpdateConfig(c)
-		}
 		if err := c.SaveToFile(c.ConfigPath); err != nil {
 			return fmt.Errorf("failed to save config: %v", err)
 		}
@@ -371,10 +313,8 @@ func runB4(cmd *cobra.Command, args []string) error {
 		mtprotoBridge.UpdateConfig(c)
 		startCFRefresh(c)
 		tproxyResolver.Set(pool.GetMatcher())
-		if !c.System.Tables.SkipSetup {
-			tproxyMgr.SyncConfig(c)
-			tables.RoutingSyncConfig(c)
-		}
+		tproxyMgr.SyncConfig(c)
+		tables.RoutingSyncConfig(c)
 		aiManager.Update(c.System.AI)
 		if _, err := config.ApplyMemoryLimit(c.System.MemoryLimit); err != nil {
 			log.Errorf("invalid system.memory_limit %q: %v", c.System.MemoryLimit, err)
@@ -426,10 +366,10 @@ func runB4(cmd *cobra.Command, args []string) error {
 	tproxyMgr.Stop()
 
 	// Perform graceful shutdown with timeout
-	return gracefulShutdown(cfgPtr.Load(), pool, tunEngine, httpServer, socks5Server, mtprotoServer, metrics, discoveryRT)
+	return gracefulShutdown(cfgPtr.Load(), pool, httpServer, socks5Server, mtprotoServer, metrics, discoveryRT)
 }
 
-func gracefulShutdown(cfg *config.Config, pool *nfq.Pool, tunEngine *b4tun.Engine, httpServer *http.Server, socks5Server *socks5.Server, mtprotoServer *mtproto.Server, metrics *handler.MetricsCollector, discoveryRT *discovery.Runtime) error {
+func gracefulShutdown(cfg *config.Config, pool *nfq.Pool, httpServer *http.Server, socks5Server *socks5.Server, mtprotoServer *mtproto.Server, metrics *handler.MetricsCollector, discoveryRT *discovery.Runtime) error {
 	// Create shutdown context with timeout
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -496,12 +436,9 @@ func gracefulShutdown(cfg *config.Config, pool *nfq.Pool, tunEngine *b4tun.Engin
 		log.Infof("Stopping netfilter queue pool...")
 		metrics.NFQueueStatus = "stopping"
 
-		// Use a goroutine with timeout for engine stop
+		// Use a goroutine with timeout for pool.Stop()
 		stopDone := make(chan struct{})
 		go func() {
-			if tunEngine != nil {
-				tunEngine.Stop()
-			}
 			pool.Stop()
 			close(stopDone)
 		}()
@@ -518,14 +455,7 @@ func gracefulShutdown(cfg *config.Config, pool *nfq.Pool, tunEngine *b4tun.Engin
 	}()
 
 	// Clean up iptables/nftables rules
-	if tunEngine != nil {
-		if !cfg.System.Tables.SkipSetup {
-			tables.ClearMasqueradeOnly(cfg)
-			tables.ClearMSSClampOnly(cfg)
-			tables.RevertConntrackSysctls()
-		}
-		metrics.TablesStatus = "inactive"
-	} else if !cfg.System.Tables.SkipSetup {
+	if !cfg.System.Tables.SkipSetup {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

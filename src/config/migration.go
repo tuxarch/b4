@@ -68,14 +68,6 @@ var migrationRegistry = map[int]MigrationFunc{
 	44: migrateV44to45, // Add per-set DNS-over-HTTPS redirect target
 	45: migrateV45to46, // Replace logging.error_file with logging.directory
 	46: migrateV46to47, // Drop the hardcoded legacy MTProto WS endpoint host (empty now falls back to it)
-	47: migrateV47to48, // Add TUN engine mode and config
-}
-
-func migrateV47to48(c *Config, _ map[string]interface{}) error {
-	log.Tracef("Migration v47->v48: Adding TUN engine mode and config")
-	c.Queue.Mode = DefaultConfig.Queue.Mode
-	c.Queue.TUN = DefaultConfig.Queue.TUN
-	return nil
 }
 
 func migrateV46to47(c *Config, _ map[string]interface{}) error {
@@ -766,26 +758,7 @@ func (c *Config) LoadWithMigration(path string) (bool, error) {
 
 	c.System.Geo.SanitizePaths(filepath.Dir(c.ConfigPath))
 
-	if c.migratePasswordHash() {
-		migrated = true
-	}
-
 	return migrated, nil
-}
-
-func (c *Config) migratePasswordHash() bool {
-	p := c.System.WebServer.Password
-	if p == "" || IsHashedPassword(p) {
-		return false
-	}
-	h, err := HashPassword(p)
-	if err != nil {
-		log.Errorf("failed to hash web server password during migration: %v", err)
-		return false
-	}
-	c.System.WebServer.Password = h
-	log.Infof("Migrated plaintext web server password to bcrypt hash")
-	return true
 }
 
 func (c *Config) applyMigrations(startVersion int, rawJSON map[string]interface{}) error {

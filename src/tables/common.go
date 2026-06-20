@@ -62,74 +62,6 @@ func DetectBackend(cfg *config.Config) string {
 	return detectFirewallBackend(cfg)
 }
 
-func ApplyMasqueradeOnly(cfg *config.Config) error {
-	if !cfg.System.Tables.Masquerade {
-		return nil
-	}
-	loadKernelModules()
-	backend := detectFirewallBackend(cfg)
-	if backend == backendNFTables {
-		nft := NewNFTablesManager(cfg)
-		nft.ClearMasquerade()
-		return nft.ApplyMasquerade()
-	}
-	return NewIPTablesManager(cfg, backend == backendIPTablesLegacy).ApplyMasquerade()
-}
-
-func ApplyConntrackSysctls() {
-	for _, s := range b4SysctlSettings() {
-		s.Apply()
-	}
-}
-
-func RevertConntrackSysctls() {
-	for _, s := range b4SysctlSettings() {
-		s.RevertBack()
-	}
-}
-
-func ClearMasqueradeOnly(cfg *config.Config) {
-	if !cfg.System.Tables.Masquerade {
-		return
-	}
-	backend := detectFirewallBackend(cfg)
-	if backend == backendNFTables {
-		NewNFTablesManager(cfg).ClearMasquerade()
-		return
-	}
-	NewIPTablesManager(cfg, backend == backendIPTablesLegacy).ClearMasquerade()
-}
-
-func hasMSSClamp(cfg *config.Config) bool {
-	global, _ := cfg.HasGlobalMSSClamp()
-	return global || len(cfg.CollectDeviceMSSClamps()) > 0 || len(cfg.CollectSetMSSClamps()) > 0
-}
-
-func ApplyMSSClampOnly(cfg *config.Config) error {
-	if !hasMSSClamp(cfg) {
-		return nil
-	}
-	loadKernelModules()
-	backend := detectFirewallBackend(cfg)
-	if backend == backendNFTables {
-		nft := NewNFTablesManager(cfg)
-		if err := nft.createTable(); err != nil {
-			return err
-		}
-		return nft.ApplyMSSClamp()
-	}
-	return NewIPTablesManager(cfg, backend == backendIPTablesLegacy).ApplyMSSClamp()
-}
-
-func ClearMSSClampOnly(cfg *config.Config) {
-	backend := detectFirewallBackend(cfg)
-	if backend == backendNFTables {
-		NewNFTablesManager(cfg).ClearMSSClamp()
-		return
-	}
-	NewIPTablesManager(cfg, backend == backendIPTablesLegacy).ClearMSSClamp()
-}
-
 var iptWaitSupport sync.Map
 
 var iptVersionRe = regexp.MustCompile(`v(\d+)\.(\d+)(?:\.(\d+))?`)
@@ -274,8 +206,7 @@ func runLogged(op string, args ...string) {
 		if strings.Contains(msg, "File exists") || strings.Contains(msg, "already exists") {
 			return
 		}
-		if strings.Contains(msg, "No such file or directory") || strings.Contains(msg, "FIB table does not exist") ||
-			strings.Contains(msg, "The set with the given name does not exist") || strings.Contains(msg, "No such process") {
+		if strings.Contains(msg, "No such file or directory") || strings.Contains(msg, "FIB table does not exist") {
 			log.Tracef("%s: %s | cmd=%s", op, msg, strings.Join(args, " "))
 			return
 		}
