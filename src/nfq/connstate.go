@@ -19,7 +19,7 @@ type connInfo struct {
 	responseSeen  bool
 	rstCount      int
 	serverHasOpts bool
-	established    bool
+	established   bool
 }
 
 type tlsInfo struct {

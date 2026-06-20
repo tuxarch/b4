@@ -45,6 +45,7 @@ type Worker struct {
 	wg               sync.WaitGroup
 	matcher          atomic.Value
 	sock             *sock.Sender
+	clientSock       *sock.Sender
 	ipToMac          atomic.Value
 	tlsCache         *tlsInfoCache
 	connTracker      *connStateTracker

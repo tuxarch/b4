@@ -1,5 +1,12 @@
 # B4 - Bye Bye Big Bro
 
+## [1.70.0] - 2026-06-xx
+
+- ADDED: **New engine for devices without NFQUEUE** - some minimal devices lack the kernel modules b4 normally needs, so it could not run on them. A new mode under Settings → Feature Flags routes traffic through a virtual interface (TUN) instead. It inspects only the first packets of each TLS (port 443) and DNS connection, like the normal engine, rather than carrying every packet, and leaves the device's default route in place; on kernels that cannot count per-connection packets it routes the whole default route through the TUN instead.
+- CHANGED: **Web UI password is now stored securely** - it is kept only as a hash and is no longer shown on the settings page (leave the field blank to keep it, or type a new one to change it). Repeated failed logins are briefly blocked, and a session now expires after a day. Existing setups are migrated automatically.
+- FIXED: **A set's encrypted DNS (DoH) redirect failed in some setups** - lookups could time out or come back empty, so pages would not load. This affected gateway and container setups (for example b4 in a container on MikroTik) using NAT masquerade.
+- FIXED: **Routing set stopped updating its addresses on its own** - in some setups (for example b4 in a container on MikroTik) the set's addresses only filled in on restart or when the set was toggled, then expired and were never refreshed. The set now learns addresses live from DNS replies again.
+
 ## [1.69.1] - 2026-06-14
 
 - FIXED: **Sets manager felt frozen after enabling, reordering, duplicating, or deleting a set** - the screen only changed once the action had been saved and the whole configuration re-fetched a second or two later, so a click looked like nothing had happened, a dragged set snapped back to its old place before jumping to the new one, and a duplicate appeared out of nowhere after a pause.
@@ -29,7 +36,7 @@
 - FIXED: **Leftover "zombie" update processes piling up** - each update attempt left a finished helper process behind; these are now cleaned up.
 - ADDED: **Update log** - every Web UI update now writes a step-by-step trace to `update.log` in the log folder (default `/var/log/b4`, reset each attempt), making failed updates much easier to diagnose.
 - ADDED: **Localized changelog** - the Web UI now shows the changelog in the selected language.
-- CHANGED: **Logging setting is now a folder, not a single file** - Settings → Service now asks for a log *directory* (default `/var/log/b4`) instead of a path to `errors.log`, so all of b4's log files (errors, updates, and any added later) live together and can be moved in one place. Existing configs are migrated automatically (your old folder is kept); leave the field empty to turn file logging off.
+- CHANGED: **Logging setting is now a folder, not a single file** - Settings → Service now asks for a log _directory_ (default `/var/log/b4`) instead of a path to `errors.log`, so all of b4's log files (errors, updates, and any added later) live together and can be moved in one place. Existing configs are migrated automatically (your old folder is kept); leave the field empty to turn file logging off.
 
 ## [1.67.1] - 2026-06-10
 
@@ -50,7 +57,7 @@
 ## [1.66.0] - 2026-06-07
 
 - ADDED: **Blocking stats on the Dashboard** - when a set uses Block (blackhole) mode and actually blocks something, the Dashboard now shows a "Blackhole" panel with the total number of blocked attempts, the most-blocked domains, and which devices ran into the most blocks. The panel stays hidden until there is something to show, so it never clutters the page when nothing is being blocked. Blocked connections are also tagged with a "block" label on the Traffic page so you can spot them in the live feed.
-- ADDED: **Control over the Telegram server-list backup** - to reach Telegram, b4 fetches Telegram's data center list from Telegram's official address, and falls back to a backup copy hosted by the b4 author only if that is blocked (`lavrush.in`).  Settings -> MTProto Proxy now has a "DC list fallback mirror" switch to turn it off or point it at your own copy.
+- ADDED: **Control over the Telegram server-list backup** - to reach Telegram, b4 fetches Telegram's data center list from Telegram's official address, and falls back to a backup copy hosted by the b4 author only if that is blocked (`lavrush.in`). Settings -> MTProto Proxy now has a "DC list fallback mirror" switch to turn it off or point it at your own copy.
 - FIXED: **Set Routing now respects your device choices** - if you used Settings -> Devices to make b4 work for only some devices (or to exclude some), that choice was ignored by a set's Routing tab. Whatever the set did with the traffic (send it to another network interface or an upstream proxy, run it through the Telegram bridge, or block it) happened for every device regardless. Routing now applies only to the devices you picked. You can also give an individual set its own device list in its settings, so a single set can route, bridge, or block traffic for just specific devices without affecting the rest.
 - FIXED: **The router itself showed up as a wrongly-named device on the Traffic page** - b4 mistook the router's own address for a regular client and listed it as a separate device (sometimes guessed as a phone brand), filing the router's own connections under it. b4 now recognizes its own interfaces and labels that traffic simply as "Router".
 - FIXED: **Discord voice and video calls could drop when blocking UDP** - on a set with UDP set to Drop or Reject, Discord calls could break because b4 did not recognize Discord's call traffic. b4 now lets it through (when "Filter STUN" is on, the default), so calls keep working.
@@ -725,7 +732,7 @@
 
 ## [1.10.1] - 2025-11-03
 
-- IMPROVED: Intermittent connection failures where blocked sites would randomly fail to load in certain browsers (`Safari`, `Firefox`, `Chrome`). Connections *should* now be more stable and reliable across all browsers by optimizing packet fragmentation strategy.
+- IMPROVED: Intermittent connection failures where blocked sites would randomly fail to load in certain browsers (`Safari`, `Firefox`, `Chrome`). Connections _should_ now be more stable and reliable across all browsers by optimizing packet fragmentation strategy.
 
 ## [1.10.0] - 2025-11-02
 

@@ -1,6 +1,7 @@
 package sock
 
 import (
+	"fmt"
 	"net"
 	"syscall"
 
@@ -15,6 +16,10 @@ type Sender struct {
 }
 
 func NewSenderWithMark(mark int) (*Sender, error) {
+	return NewSenderWithMarkDevice(mark, "")
+}
+
+func NewSenderWithMarkDevice(mark int, device string) (*Sender, error) {
 	s := &Sender{
 		fd4:  -1,
 		fd6:  -1,
@@ -36,6 +41,12 @@ func NewSenderWithMark(mark int) (*Sender, error) {
 		s.Close()
 		return nil, err
 	}
+	if device != "" {
+		if err := syscall.SetsockoptString(s.fd4, syscall.SOL_SOCKET, unix.SO_BINDTODEVICE, device); err != nil {
+			s.Close()
+			return nil, fmt.Errorf("bind IPv4 raw socket to %s: %w", device, err)
+		}
+	}
 
 	// Create IPv6 raw socket
 	fd6, err := syscall.Socket(syscall.AF_INET6, syscall.SOCK_RAW, syscall.IPPROTO_RAW)
@@ -46,6 +57,13 @@ func NewSenderWithMark(mark int) (*Sender, error) {
 		s.fd6 = fd6
 		if err := syscall.SetsockoptInt(s.fd6, syscall.SOL_SOCKET, unix.SO_MARK, mark); err != nil {
 			log.Warnf("Failed to set SO_MARK on IPv6 socket: %v", err)
+		}
+		if device != "" {
+			if err := syscall.SetsockoptString(s.fd6, syscall.SOL_SOCKET, unix.SO_BINDTODEVICE, device); err != nil {
+				log.Warnf("Failed to bind IPv6 socket to %s: %v - IPv6 bypass disabled", device, err)
+				_ = syscall.Close(s.fd6)
+				s.fd6 = -1
+			}
 		}
 	}
 	return s, nil

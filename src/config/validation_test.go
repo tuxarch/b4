@@ -309,6 +309,34 @@ func TestValidate_QueueFields(t *testing.T) {
 			t.Errorf("expected params.mark=0x100, got %v", f.Params["mark"])
 		}
 	})
+
+	t.Run("invalid queue mode", func(t *testing.T) {
+		cfg := NewConfig()
+		cfg.Queue.Mode = "bogus"
+		ve := mustValidationErr(t, cfg.Validate())
+		if findField(ve, "queue.mode", "invalid") == nil {
+			t.Errorf("missing queue.mode invalid; got %+v", ve.Fields)
+		}
+	})
+
+	t.Run("tun mode requires out_interface", func(t *testing.T) {
+		cfg := NewConfig()
+		cfg.Queue.Mode = "tun"
+		cfg.Queue.TUN.OutInterface = ""
+		ve := mustValidationErr(t, cfg.Validate())
+		if findField(ve, "queue.tun.out_interface", "required") == nil {
+			t.Errorf("missing queue.tun.out_interface required; got %+v", ve.Fields)
+		}
+	})
+
+	t.Run("valid tun config passes", func(t *testing.T) {
+		cfg := NewConfig()
+		cfg.Queue.Mode = "tun"
+		cfg.Queue.TUN.OutInterface = "eth0"
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("valid tun config rejected: %v", err)
+		}
+	})
 }
 
 func TestValidate_RequiredSetID(t *testing.T) {

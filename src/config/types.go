@@ -71,6 +71,7 @@ type ApiConfig struct {
 }
 
 type QueueConfig struct {
+	Mode              string         `json:"mode"`
 	StartNum          int            `json:"start_num"`
 	Threads           int            `json:"threads"`
 	Mark              uint           `json:"mark"` // Main injected packets mark
@@ -81,7 +82,17 @@ type QueueConfig struct {
 	Interfaces        []string       `json:"interfaces"`
 	Devices           DevicesConfig  `json:"devices"`
 	MSSClamp          MSSClampConfig `json:"mss_clamp"`
+	TUN               TUNConfig      `json:"tun"`
 	IsDiscovery       bool           `json:"-"`
+}
+
+type TUNConfig struct {
+	DeviceName   string `json:"device_name"`
+	Address      string `json:"address"`
+	AddressV6    string `json:"address_v6"`
+	OutInterface string `json:"out_interface"`
+	OutGateway   string `json:"out_gateway"`
+	RouteTable   int    `json:"route_table"`
 }
 
 type DevicesConfig struct {
@@ -299,6 +310,7 @@ type WebServerConfig struct {
 	TLSKey      string `json:"tls_key"`
 	Username    string `json:"username"`
 	Password    string `json:"password"`
+	PasswordSet bool   `json:"password_set,omitempty"`
 	Language    string `json:"language"`
 	IsEnabled   bool   `json:"-"`
 }

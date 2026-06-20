@@ -58,7 +58,7 @@ func (a *API) handleConfigReset(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(ConfigResponse{
 		Success: true,
 		Message: "Configuration reset to defaults",
-		Config:  &newCfg,
+		Config:  redactWebServerSecrets(&newCfg),
 	})
 }
 
@@ -74,6 +74,37 @@ func (a *API) applyRuntimeChanges(newCfg, oldCfg *config.Config) {
 	}
 
 	a.geodataManager.UpdatePaths(newCfg.System.Geo.GeoSitePath, newCfg.System.Geo.GeoIpPath)
+}
+
+func redactWebServerSecrets(cfg *config.Config) *config.Config {
+	clone := cfg.Clone()
+	if clone.System.WebServer.Password != "" {
+		clone.System.WebServer.PasswordSet = true
+		clone.System.WebServer.Password = ""
+	}
+	return clone
+}
+
+func reconcileWebPassword(newCfg, curCfg *config.Config) error {
+	ws := &newCfg.System.WebServer
+	ws.PasswordSet = false
+	if ws.Username == "" {
+		ws.Password = ""
+		return nil
+	}
+	if ws.Password == "" {
+		ws.Password = curCfg.System.WebServer.Password
+		return nil
+	}
+	if config.IsHashedPassword(ws.Password) {
+		return nil
+	}
+	h, err := config.HashPassword(ws.Password)
+	if err != nil {
+		return err
+	}
+	ws.Password = h
+	return nil
 }
 
 func (a *API) handleConfig(w http.ResponseWriter, r *http.Request) {
@@ -165,7 +196,7 @@ func (a *API) getConfig(w http.ResponseWriter) {
 	sort.Strings(ifaces)
 
 	response := ConfigResponse{
-		Config:              cfg,
+		Config:              redactWebServerSecrets(cfg),
 		Sets:                setsWithStats,
 		AvailableInterfaces: ifaces,
 		Success:             true,
@@ -257,6 +288,12 @@ func (a *API) updateConfig(w http.ResponseWriter, r *http.Request) {
 	oldConfig := curCfg.Clone()
 	newConfig.ConfigPath = curCfg.ConfigPath
 
+	if err := reconcileWebPassword(&newConfig, curCfg); err != nil {
+		log.Errorf("Failed to hash web server password: %v", err)
+		writeAPIError(w, ErrInternal("Failed to process credentials"))
+		return
+	}
+
 	a.applyRuntimeChanges(&newConfig, curCfg)
 
 	// Calculate statistics for response
@@ -333,7 +370,7 @@ func (a *API) updateConfig(w http.ResponseWriter, r *http.Request) {
 	response := ConfigResponse{
 		Success: true,
 		Message: "Configuration updated successfully",
-		Config:  &newConfig,
+		Config:  redactWebServerSecrets(&newConfig),
 		Sets:    setsWithStats,
 	}
 

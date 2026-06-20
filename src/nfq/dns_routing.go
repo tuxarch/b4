@@ -10,12 +10,8 @@ import (
 	"github.com/daniellavrushin/b4/log"
 )
 
-// RoutingHandleDNSFunc is called when DNS-resolved IPs are available for routing.
-// Set from main.go to break the tables ↔ nfq import cycle.
 var RoutingHandleDNSFunc func(cfg *config.Config, set *config.SetConfig, ips []net.IP)
 
-// RoutingLearnIPFunc adds a destination IP observed at SNI-match time to an existing
-// routing set's ipset (cheap, hot-path safe). Set from main.go.
 var RoutingLearnIPFunc func(cfg *config.Config, set *config.SetConfig, ip net.IP)
 
 func registerEscalatedRoute(cfg *config.Config, escSet *config.SetConfig, dst net.IP) {
@@ -29,9 +25,6 @@ func registerEscalatedRoute(cfg *config.Config, escSet *config.SetConfig, dst ne
 	RoutingHandleDNSFunc(cfg, escSet, []net.IP{dst})
 }
 
-// registerLearnedRoute steers future connections to dst by adding it to the matched
-// routing set's ipset, using the IP seen at the TLS/QUIC ClientHello. No-op for
-// non-routing and block-mode sets (filtered inside RoutingLearnIPFunc).
 func registerLearnedRoute(cfg *config.Config, set *config.SetConfig, dst net.IP) {
 	if cfg == nil || set == nil || dst == nil || !set.Routing.Enabled || RoutingLearnIPFunc == nil {
 		return
@@ -117,8 +110,6 @@ func stopDNSRouteCleanup() {
 	}
 }
 
-// ShutdownDNSRouteRuntime stops global DNS-route cleanup goroutine.
-// Call once on process shutdown.
 func ShutdownDNSRouteRuntime() {
 	stopDNSRouteCleanup()
 }
