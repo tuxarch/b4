@@ -1,17 +1,24 @@
 import { ParsedLog } from "@b4.logs";
 
 export const SORT_STORAGE_KEY = "b4_domains_sort";
+export const AGG_SORT_STORAGE_KEY = "b4_connections_agg_sort";
 
 export interface DomainSortState {
   column: string | null;
   direction: "asc" | "desc" | null;
 }
 
-export function loadSortState(): DomainSortState {
+export function loadSortState(key: string = SORT_STORAGE_KEY): DomainSortState {
   try {
-    const stored = localStorage.getItem(SORT_STORAGE_KEY);
+    const stored = localStorage.getItem(key);
     if (stored) {
-      return JSON.parse(stored) as DomainSortState;
+      const parsed = JSON.parse(stored) as Partial<DomainSortState>;
+      const column = typeof parsed.column === "string" ? parsed.column : null;
+      const direction =
+        parsed.direction === "asc" || parsed.direction === "desc"
+          ? parsed.direction
+          : null;
+      return { column, direction };
     }
   } catch (e) {
     console.error("Failed to load sort state:", e);
@@ -22,12 +29,10 @@ export function loadSortState(): DomainSortState {
 export function saveSortState(
   column: string | null,
   direction: "asc" | "desc" | null,
+  key: string = SORT_STORAGE_KEY,
 ): void {
   try {
-    localStorage.setItem(
-      SORT_STORAGE_KEY,
-      JSON.stringify({ column, direction }),
-    );
+    localStorage.setItem(key, JSON.stringify({ column, direction }));
   } catch (e) {
     console.error("Failed to save sort state:", e);
   }

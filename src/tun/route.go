@@ -52,12 +52,37 @@ type routeManager struct {
 	dupIPs       []string
 	replyCapture bool
 
+	followDefault bool
+
 	mu                sync.Mutex
 	srcIP             string
 	resolvedCapture   string
 	multiport         bool
 	captureRulesAdded bool
 	captureExcl       []string
+}
+
+func resolveDefaultEgress(skipDev string) (iface, gw, src string, ok bool) {
+	out, err := run("ip", "-4", "route", "show", "default")
+	if err != nil {
+		return "", "", "", false
+	}
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		dev := extractField(line, "dev")
+		if dev == "" || dev == skipDev {
+			continue
+		}
+		src = extractField(line, "src")
+		if src == "" {
+			src = interfacePrimaryIPv4(dev)
+		}
+		return dev, extractGateway(line), src, true
+	}
+	return "", "", "", false
 }
 
 func (r *routeManager) setupNAT() {
@@ -166,18 +191,29 @@ func (r *routeManager) setup() error {
 	r.savedDefault = strings.TrimSpace(strings.SplitN(out, "\n", 2)[0])
 	log.Infof("TUN: saved default route: %s", r.savedDefault)
 
-	if r.outGateway == "" {
-		r.outGateway = extractGateway(r.savedDefault)
-		if r.outGateway != "" {
-			log.Infof("TUN: auto-detected gateway: %s", r.outGateway)
-		} else {
-			log.Infof("TUN: no gateway on default route, treating %s as point-to-point", r.outIface)
+	var srcIP string
+	if r.followDefault {
+		iface, gw, src, found := resolveDefaultEgress(r.tunName)
+		if !found {
+			return fmt.Errorf("TUN follow-default mode: no usable IPv4 default route to derive the uplink; bring up the WAN/VPN first or pin queue.tun.out_interface")
 		}
-	}
-
-	srcIP := extractField(r.savedDefault, "src")
-	if srcIP == "" {
+		r.outIface = iface
+		r.outGateway = gw
+		srcIP = src
+		log.Infof("TUN: following default route (uplink=%s gw=%q src=%q)", iface, gw, src)
+	} else {
+		if r.outGateway == "" {
+			r.outGateway = extractGateway(r.savedDefault)
+			if r.outGateway != "" {
+				log.Infof("TUN: auto-detected gateway: %s", r.outGateway)
+			} else {
+				log.Infof("TUN: no gateway on default route, treating %s as point-to-point", r.outIface)
+			}
+		}
 		srcIP = interfacePrimaryIPv4(r.outIface)
+		if srcIP == "" {
+			srcIP = extractField(r.savedDefault, "src")
+		}
 	}
 	r.srcIP = srcIP
 
@@ -265,7 +301,7 @@ func (r *routeManager) restoreRPFilter() {
 
 func (r *routeManager) setupBypassTable() error {
 	tableStr := fmt.Sprintf("%d", r.routeTable)
-	markStr := fmt.Sprintf("0x%x", r.mark)
+	markStr := reinjectMarkMatch()
 
 	if existing, err := run("ip", "route", "show", "table", tableStr); err == nil && strings.TrimSpace(existing) != "" {
 		if !r.ownsBypassTable(markStr, tableStr) {
@@ -303,7 +339,10 @@ func (r *routeManager) ownsBypassTable(markStr, tableStr string) bool {
 			continue
 		}
 		fw := ruleFieldValue(line, "fwmark")
-		if fw == markStr || strings.HasPrefix(fw, markStr+"/") {
+		bare := strings.SplitN(markStr, "/", 2)[0]
+		legacy := fmt.Sprintf("0x%x", r.mark)
+		if fw == markStr || fw == bare || strings.HasPrefix(fw, bare+"/") ||
+			fw == legacy || strings.HasPrefix(fw, legacy+"/") {
 			return true
 		}
 	}
@@ -311,9 +350,13 @@ func (r *routeManager) ownsBypassTable(markStr, tableStr string) bool {
 }
 
 func (r *routeManager) delFwmarkRule(markStr, tableStr string) {
-	for {
-		if _, err := run("ip", "rule", "del", "fwmark", markStr, "lookup", tableStr); err != nil {
-			return
+	bare := strings.SplitN(markStr, "/", 2)[0]
+	legacy := fmt.Sprintf("0x%x", r.mark)
+	for _, m := range []string{markStr, bare, legacy, legacy + "/" + legacy} {
+		for {
+			if _, err := run("ip", "rule", "del", "fwmark", m, "lookup", tableStr); err != nil {
+				break
+			}
 		}
 	}
 }
@@ -351,14 +394,77 @@ func (r *routeManager) setupDefaultCapture(srcIP string) error {
 	return nil
 }
 
+func (r *routeManager) refreshEgress() bool {
+	if !r.followDefault {
+		return false
+	}
+	iface, gw, src, ok := resolveDefaultEgress(r.tunName)
+	if !ok || (iface == r.outIface && gw == r.outGateway) {
+		return false
+	}
+	log.Infof("TUN: default route changed; re-pointing egress %s(gw %q) -> %s(gw %q)", r.outIface, r.outGateway, iface, gw)
+
+	if !r.skipTables {
+		r.restoreRPFilter()
+	}
+	r.removeSNAT()
+	r.outIface = iface
+	r.outGateway = gw
+	if src != "" {
+		r.srcIP = src
+	}
+	if r.resolvedCapture == "default" {
+		if gw != "" {
+			r.savedDefault = fmt.Sprintf("default via %s dev %s", gw, iface)
+		} else {
+			r.savedDefault = fmt.Sprintf("default dev %s", iface)
+		}
+		if src != "" {
+			r.savedDefault += " src " + src
+		}
+	}
+	if !r.skipTables {
+		r.savedRPFilter = ""
+		r.loosenRPFilter()
+	}
+
+	tableStr := strconv.Itoa(r.routeTable)
+	run("ip", "route", "flush", "table", tableStr)
+	if err := r.addBypassDefault(tableStr); err != nil {
+		log.Warnf("TUN: reconcile failed to rebuild bypass route for new uplink: %v", err)
+	}
+
+	if mtu := interfaceMTU(iface); mtu > 0 {
+		run("ip", "link", "set", r.tunName, "mtu", strconv.Itoa(mtu))
+	}
+
+	if r.resolvedCapture == "ports" {
+		if err := r.replaceCaptureDefault(strconv.Itoa(r.captureTable)); err != nil {
+			log.Warnf("TUN: reconcile failed to refresh capture src for new uplink: %v", err)
+		}
+	} else if err := r.replaceDefaultIntoTun(); err != nil {
+		log.Warnf("TUN: reconcile failed to refresh default-capture for new uplink: %v", err)
+	}
+
+	return true
+}
+
 func (r *routeManager) reconcile() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if newIP := interfacePrimaryIPv4(r.outIface); newIP != "" && newIP != r.srcIP {
-		log.Infof("TUN: uplink %s address changed %q -> %q; updating SNAT and capture source", r.outIface, r.srcIP, newIP)
+	r.refreshEgress()
+
+	newSrc := interfacePrimaryIPv4(r.outIface)
+	if r.followDefault {
+		if _, _, s, ok := resolveDefaultEgress(r.tunName); ok && s != "" {
+			newSrc = s
+		}
+	}
+	if newSrc != "" && newSrc != r.srcIP {
+		log.Infof("TUN: uplink %s source changed %q -> %q; updating SNAT and capture source", r.outIface, r.srcIP, newSrc)
 		r.removeSNAT()
-		r.srcIP = newIP
+		r.srcIP = newSrc
 		if r.resolvedCapture == "ports" {
 			if err := r.replaceCaptureDefault(strconv.Itoa(r.captureTable)); err != nil {
 				log.Warnf("TUN: reconcile failed to refresh capture-table src: %v", err)
@@ -408,7 +514,7 @@ func (r *routeManager) ensureNAT() {
 }
 
 func (r *routeManager) ensureBypass() {
-	markStr := fmt.Sprintf("0x%x", r.mark)
+	markStr := reinjectMarkMatch()
 	tableStr := fmt.Sprintf("%d", r.routeTable)
 	if !r.ownsBypassTable(markStr, tableStr) {
 		if _, err := run("ip", "rule", "add", "fwmark", markStr, "lookup", tableStr, "priority", "100"); err != nil {
@@ -464,7 +570,7 @@ func (r *routeManager) addBypassDefault(tableStr string) error {
 }
 
 func (r *routeManager) teardown() {
-	markStr := fmt.Sprintf("0x%x", r.mark)
+	markStr := reinjectMarkMatch()
 	tableStr := fmt.Sprintf("%d", r.routeTable)
 
 	if r.resolvedCapture == "ports" {

@@ -30,6 +30,9 @@ export const FeatureSettings = ({ config, onChange }: FeatureSettingsProps) => {
     onChange("queue.interfaces", updated);
   };
 
+  const tunOutInterface = config.queue.tun?.out_interface;
+  const tunFollowsDefault = !tunOutInterface || tunOutInterface === "auto";
+
   const masqueradeSwitch = (
     <B4Switch
       label={t("settings.Feature.natMasquerade")}
@@ -85,16 +88,18 @@ export const FeatureSettings = ({ config, onChange }: FeatureSettingsProps) => {
         <B4FormGroup label={t("settings.Feature.tunSettings")} columns={2}>
           <B4Select
             label={t("settings.Feature.tunOutInterface")}
-            value={config.queue.tun?.out_interface || ""}
+            value={tunFollowsDefault ? "" : tunOutInterface ?? ""}
             onChange={(e) =>
               onChange("queue.tun.out_interface", e.target.value)
             }
             options={[
-              { value: "", label: t("settings.Feature.tunOutInterfaceNone") },
-              ...(config.available_ifaces ?? []).map((i) => ({
-                value: i,
-                label: i,
-              })),
+              { value: "", label: t("settings.Feature.tunOutInterfaceAuto") },
+              ...(config.available_ifaces ?? [])
+                .filter((i) => i !== (config.queue.tun?.device_name || "b4tun0"))
+                .map((i) => ({
+                  value: i,
+                  label: i,
+                })),
             ]}
             helperText={t("settings.Feature.tunOutInterfaceDesc")}
           />
@@ -103,7 +108,12 @@ export const FeatureSettings = ({ config, onChange }: FeatureSettingsProps) => {
             value={config.queue.tun?.out_gateway || ""}
             onChange={(e) => onChange("queue.tun.out_gateway", e.target.value)}
             placeholder={t("settings.Feature.tunOutGatewayPlaceholder")}
-            helperText={t("settings.Feature.tunOutGatewayHelp")}
+            disabled={tunFollowsDefault}
+            helperText={t(
+              tunFollowsDefault
+                ? "settings.Feature.tunOutGatewayAuto"
+                : "settings.Feature.tunOutGatewayHelp"
+            )}
             selectOnFocus
           />
           <B4TextField
@@ -120,9 +130,9 @@ export const FeatureSettings = ({ config, onChange }: FeatureSettingsProps) => {
             helperText={t("settings.Feature.tunDeviceNameHelp")}
             selectOnFocus
           />
-          {!config.queue.tun?.out_interface && (
-            <B4Alert severity="warning">
-              {t("settings.Feature.tunOutInterfaceRequired")}
+          {tunFollowsDefault && (
+            <B4Alert severity="info">
+              {t("settings.Feature.tunOutInterfaceAutoHint")}
             </B4Alert>
           )}
         </B4FormGroup>

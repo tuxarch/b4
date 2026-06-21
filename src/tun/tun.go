@@ -29,6 +29,8 @@ type Engine struct {
 	routes        *routeManager
 	sender        *sock.Sender
 	clientSender  *sock.Sender
+	trigger       chan struct{}
+	egressW       *egressWatcher
 	wg            sync.WaitGroup
 	quit          chan struct{}
 	stopOnce      sync.Once
@@ -96,7 +98,7 @@ func (e *Engine) Start() error {
 	e.tunName = name
 	log.Infof("TUN: opened device %s", name)
 
-	sender, err := sock.NewSenderWithMarkDevice(int(cfg.Queue.Mark)|engine.ReinjectMarkBit, tunCfg.OutInterface)
+	sender, err := sock.NewSenderWithMark(int(cfg.Queue.Mark) | engine.ReinjectMarkBit)
 	if err != nil {
 		e.tunFile.Close()
 		run("ip", "link", "del", name)
@@ -108,7 +110,7 @@ func (e *Engine) Start() error {
 	if replyCapture {
 		clientSender, err := sock.NewSenderWithMark(defaultClientMark)
 		if err != nil {
-			e.sender.Close()
+			sender.Close()
 			e.tunFile.Close()
 			run("ip", "link", "del", name)
 			return err
@@ -134,25 +136,26 @@ func (e *Engine) Start() error {
 	dupV4, _ := cfg.CollectDuplicateIPs()
 
 	e.routes = &routeManager{
-		tunName:      name,
-		tunAddr:      address,
-		tunAddrV6:    tunCfg.AddressV6,
-		outIface:     tunCfg.OutInterface,
-		outGateway:   tunCfg.OutGateway,
-		mark:         cfg.Queue.Mark,
-		routeTable:   routeTable,
-		skipTables:   cfg.System.Tables.SkipSetup,
-		captureTable: captureTable,
-		tcpPorts:     normalizePorts(cfg.CollectTCPPorts()),
-		udpPorts:     normalizePorts(cfg.CollectUDPPorts()),
-		tcpLimit:     tcpLimit,
-		udpLimit:     udpLimit,
-		dupIPs:       dupV4,
-		replyCapture: replyCapture,
+		tunName:       name,
+		tunAddr:       address,
+		tunAddrV6:     tunCfg.AddressV6,
+		outIface:      tunCfg.OutInterface,
+		outGateway:    tunCfg.OutGateway,
+		mark:          cfg.Queue.Mark,
+		routeTable:    routeTable,
+		skipTables:    cfg.System.Tables.SkipSetup,
+		captureTable:  captureTable,
+		tcpPorts:      normalizePorts(cfg.CollectTCPPorts()),
+		udpPorts:      normalizePorts(cfg.CollectUDPPorts()),
+		tcpLimit:      tcpLimit,
+		udpLimit:      udpLimit,
+		dupIPs:        dupV4,
+		replyCapture:  replyCapture,
+		followDefault: tunCfg.FollowsDefaultRoute(),
 	}
 	if err := e.routes.setup(); err != nil {
 		e.routes.teardown()
-		e.sender.Close()
+		sender.Close()
 		e.tunFile.Close()
 		return err
 	}
@@ -168,8 +171,15 @@ func (e *Engine) Start() error {
 
 	log.Infof("TUN: started %d reader threads", threads)
 
+	e.trigger = make(chan struct{}, 1)
 	e.wg.Add(1)
 	go e.reconcileLoop()
+
+	e.egressW = newEgressWatcher(e.triggerReconcile)
+	if err := e.egressW.Start(); err != nil {
+		log.Warnf("TUN: egress netlink watcher disabled (%v); falling back to periodic reconcile poll", err)
+		e.egressW = nil
+	}
 
 	return nil
 }
@@ -188,6 +198,10 @@ func (e *Engine) reconcileLoop() {
 		select {
 		case <-e.quit:
 			return
+		case <-e.trigger:
+			if e.routes != nil {
+				e.routes.reconcile()
+			}
 		case <-ticker.C:
 			if e.routes != nil {
 				e.routes.reconcile()
@@ -280,6 +294,13 @@ func replyCaptureNeeded(cfg *config.Config) bool {
 	return false
 }
 
+func (e *Engine) triggerReconcile() {
+	select {
+	case e.trigger <- struct{}{}:
+	default:
+	}
+}
+
 func (e *Engine) logForwardError(err error, src, dst string) {
 	n := atomic.AddUint64(&e.fwdErrCount, 1)
 	now := time.Now().Unix()
@@ -292,6 +313,9 @@ func (e *Engine) logForwardError(err error, src, dst string) {
 
 func (e *Engine) Stop() {
 	e.stopOnce.Do(func() {
+		if e.egressW != nil {
+			e.egressW.Stop()
+		}
 		close(e.quit)
 
 		if e.tunFile != nil {

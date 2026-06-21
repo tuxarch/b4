@@ -59,6 +59,9 @@ func ClearStaleArtifacts(cfg *config.Config) {
 	if clearOwnedRoutingTable(steerMarkMatch(), captureTable) {
 		cleared = true
 	}
+	if clearOwnedRoutingTable(reinjectMarkMatch(), routeTable) {
+		cleared = true
+	}
 	if clearOwnedRoutingTable(fmt.Sprintf("0x%x", cfg.MainInjectedMark()), routeTable) {
 		cleared = true
 	}
