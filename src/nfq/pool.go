@@ -2,6 +2,7 @@ package nfq
 
 import (
 	"context"
+	"os"
 	"sync"
 	"time"
 
@@ -24,6 +25,31 @@ func NewWorkerWithQueue(cfg *config.Config, qnum uint16) *Worker {
 	w.cfg.Store(cfg)
 
 	return w
+}
+
+func (p *Pool) EnableTUNSourceResolver(wanIP string) {
+	if p.tunSrc == nil {
+		if f, err := os.Open(conntrackPath); err != nil {
+			log.Warnf("TUN: per-device source attribution unavailable (%s not readable: %v); device logging/filtering will show the uplink address in TUN mode", conntrackPath, err)
+			return
+		} else {
+			f.Close()
+		}
+		p.tunSrc = newTunSrcResolver(wanIP)
+	} else {
+		p.tunSrc.setWAN(wanIP)
+	}
+	for _, w := range p.Workers {
+		w.srcResolver = p.tunSrc
+	}
+	log.Infof("TUN: source attribution enabled (recovering LAN source from conntrack; uplink %s)", wanIP)
+}
+
+func (p *Pool) UpdateTUNSourceWAN(wanIP string) {
+	if p.tunSrc == nil || wanIP == "" {
+		return
+	}
+	p.tunSrc.setWAN(wanIP)
 }
 
 func NewPool(cfg *config.Config) *Pool {

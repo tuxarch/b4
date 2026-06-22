@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/daniellavrushin/b4/config"
+	"github.com/daniellavrushin/b4/engine"
 	"github.com/daniellavrushin/b4/log"
 )
 
@@ -399,13 +400,9 @@ func (n *NFTablesManager) ApplyMasquerade() error {
 		return fmt.Errorf("failed to create nat postrouting chain: %w", err)
 	}
 
-	markValue := n.cfg.Queue.Mark
-	if markValue == 0 {
-		markValue = 0x8000
-	}
-	markAccept := fmt.Sprintf("0x%x", markValue)
+	markClient := fmt.Sprintf("0x%x", engine.ClientMark)
 	if _, err := n.runNft("add", "rule", "ip", nftNatTableName, nftNatChainName,
-		"meta", "mark", "&", markAccept, "==", markAccept, "return"); err != nil {
+		"meta", "mark", "&", markClient, "==", markClient, "return"); err != nil {
 		return fmt.Errorf("failed to add masquerade mark-bypass rule: %w", err)
 	}
 
@@ -532,7 +529,7 @@ func (n *NFTablesManager) ApplyMSSClamp() error {
 		hasV6 := len(e.IPv6) > 0 && cfg.Queue.IPv6Enabled
 
 		if hasV4 {
-			if err := n.createSet(setName4, "ipv4_addr", "flags interval ;"); err != nil {
+			if err := n.createSet(setName4, "ipv4_addr", "flags interval ; auto-merge ;"); err != nil {
 				return fmt.Errorf("failed to create set MSS ipv4 set: %w", err)
 			}
 			if err := n.addSetElements(setName4, e.IPv4); err != nil {
@@ -540,7 +537,7 @@ func (n *NFTablesManager) ApplyMSSClamp() error {
 			}
 		}
 		if hasV6 {
-			if err := n.createSet(setName6, "ipv6_addr", "flags interval ;"); err != nil {
+			if err := n.createSet(setName6, "ipv6_addr", "flags interval ; auto-merge ;"); err != nil {
 				return fmt.Errorf("failed to create set MSS ipv6 set: %w", err)
 			}
 			if err := n.addSetElements(setName6, e.IPv6); err != nil {
