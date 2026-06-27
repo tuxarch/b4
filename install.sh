@@ -1469,7 +1469,7 @@ _openwrt_load_kmods() {
         if [ "$B4_PKG_MANAGER" = "apk" ]; then
             log_info "Try: apk add kmod-nft-queue kmod-nft-nat kmod-nft-compat"
         else
-            log_info "Try: opkg install kmod-nfnetlink-queue kmod-ipt-nfqueue iptables-mod-nfqueue kmod-ipt-conntrack-extra iptables-mod-conntrack-extra"
+            log_info "Try: opkg install kmod-nft-queue kmod-nft-conntrack kmod-nfnetlink-queue kmod-ipt-nfqueue iptables-mod-nfqueue kmod-ipt-conntrack-extra iptables-mod-conntrack-extra"
         fi
     fi
 }
@@ -1485,7 +1485,7 @@ _openwrt_check_recommended() {
         fi
     fi
 
-    if [ "$B4_PKG_MANAGER" = "apk" ]; then
+    if _nft_functional; then
         if ! _kmod_available "nft_queue"; then
             rec_missing="${rec_missing} kmod-nft-queue"
         fi
@@ -3324,6 +3324,37 @@ action_sysinfo() {
             $_nfq_ipt -t filter -F B4_CB_TEST 2>/dev/null || true
             $_nfq_ipt -t filter -X B4_CB_TEST 2>/dev/null || true
         fi
+    fi
+
+    _flow_offload=""
+    if command_exists nft; then
+        _nft_ruleset=$(nft list ruleset 2>/dev/null)
+        if echo "$_nft_ruleset" | grep -q "flow add @\|flow offload @"; then
+            if echo "$_nft_ruleset" | grep -qE "flags[[:space:]]+offload"; then
+                _flow_offload="hardware"
+            else
+                _flow_offload="software"
+            fi
+        fi
+    fi
+    if [ -z "$_flow_offload" ]; then
+        for _fb in iptables iptables-legacy; do
+            command_exists "$_fb" || continue
+            _ipt_filter=$($_fb -t filter -S 2>/dev/null)
+            if echo "$_ipt_filter" | grep -q "FLOWOFFLOAD"; then
+                if echo "$_ipt_filter" | grep -q -- "--hw"; then
+                    _flow_offload="hardware"
+                else
+                    _flow_offload="software"
+                fi
+                break
+            fi
+        done
+    fi
+    if [ -n "$_flow_offload" ]; then
+        printf "    ${RED}  WARN${NC}  %s\n" "Flow offloading active (${_flow_offload}) — bypasses b4; disable it for b4 to work" >&2
+    else
+        printf "    ${GREEN}  OK${NC}    %s\n" "Flow offloading off (b4 can intercept traffic)" >&2
     fi
 
     echo ""

@@ -382,7 +382,7 @@ func (n *NFTablesManager) natTableExists() bool {
 }
 
 func (n *NFTablesManager) ApplyMasquerade() error {
-	if !n.cfg.System.Tables.Masquerade {
+	if !n.cfg.System.Tables.Masquerade.Enabled {
 		return nil
 	}
 
@@ -400,27 +400,32 @@ func (n *NFTablesManager) ApplyMasquerade() error {
 		return fmt.Errorf("failed to create nat postrouting chain: %w", err)
 	}
 
+	if _, err := n.runNft("flush", "chain", "ip", nftNatTableName, nftNatChainName); err != nil {
+		return fmt.Errorf("failed to flush nat postrouting chain: %w", err)
+	}
+
 	markClient := fmt.Sprintf("0x%x", engine.ClientMark)
 	if _, err := n.runNft("add", "rule", "ip", nftNatTableName, nftNatChainName,
 		"meta", "mark", "&", markClient, "==", markClient, "return"); err != nil {
 		return fmt.Errorf("failed to add masquerade mark-bypass rule: %w", err)
 	}
 
-	ruleArgs := []string{"add", "rule", "ip", nftNatTableName, nftNatChainName}
-	if iface := n.cfg.System.Tables.MasqueradeInterface; iface != "" {
-		ruleArgs = append(ruleArgs, "oifname", fmt.Sprintf("%q", iface))
+	ifaces := masqueradeInterfaces(n.cfg)
+	if len(ifaces) == 0 {
+		if _, err := n.runNft("add", "rule", "ip", nftNatTableName, nftNatChainName, "masquerade"); err != nil {
+			return fmt.Errorf("failed to add masquerade rule: %w", err)
+		}
+		log.Infof("NFTABLES: masquerade enabled (interfaces: all)")
+		return nil
 	}
-	ruleArgs = append(ruleArgs, "masquerade")
 
-	if _, err := n.runNft(ruleArgs...); err != nil {
-		return fmt.Errorf("failed to add masquerade rule: %w", err)
+	for _, iface := range ifaces {
+		if _, err := n.runNft("add", "rule", "ip", nftNatTableName, nftNatChainName,
+			"oifname", fmt.Sprintf("%q", iface), "masquerade"); err != nil {
+			return fmt.Errorf("failed to add masquerade rule for %s: %w", iface, err)
+		}
 	}
-
-	iface := n.cfg.System.Tables.MasqueradeInterface
-	if iface == "" {
-		iface = "all"
-	}
-	log.Infof("NFTABLES: masquerade enabled (interface: %s)", iface)
+	log.Infof("NFTABLES: masquerade enabled (interfaces: %s)", strings.Join(ifaces, ", "))
 	return nil
 }
 

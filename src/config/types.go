@@ -255,6 +255,7 @@ type SystemConfig struct {
 	AI          AIConfig            `json:"ai"`
 	Timezone    string              `json:"timezone"`
 	MemoryLimit string              `json:"memory_limit,omitempty"`
+	Pprof       bool                `json:"pprof,omitempty"`
 }
 
 type AIConfig struct {
@@ -300,11 +301,15 @@ type Socks5Config struct {
 }
 
 type TablesConfig struct {
-	MonitorInterval     int    `json:"monitor_interval"`
-	SkipSetup           bool   `json:"skip_setup"`
-	Engine              string `json:"engine"`
-	Masquerade          bool   `json:"masquerade"`
-	MasqueradeInterface string `json:"masquerade_interface"`
+	MonitorInterval int              `json:"monitor_interval"`
+	SkipSetup       bool             `json:"skip_setup"`
+	Engine          string           `json:"engine"`
+	Masquerade      MasqueradeConfig `json:"masquerade"`
+}
+
+type MasqueradeConfig struct {
+	Enabled    bool     `json:"enabled"`
+	Interfaces []string `json:"interfaces"`
 }
 
 type WebServerConfig struct {

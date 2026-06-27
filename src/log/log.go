@@ -24,6 +24,21 @@ const (
 	LevelDebug
 )
 
+func (l Level) String() string {
+	switch l {
+	case LevelError:
+		return "error"
+	case LevelInfo:
+		return "info"
+	case LevelTrace:
+		return "trace"
+	case LevelDebug:
+		return "debug"
+	default:
+		return "silent"
+	}
+}
+
 var (
 	CurLevel         atomic.Int32
 	errFile          *os.File
@@ -49,12 +64,31 @@ func (m *multi) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+func (m *multi) add(w io.Writer) {
+	m.mu.Lock()
+	m.ws = append(m.ws, w)
+	m.mu.Unlock()
+}
+
+func (m *multi) remove(w io.Writer) {
+	m.mu.Lock()
+	out := m.ws[:0]
+	for _, x := range m.ws {
+		if x != w {
+			out = append(out, x)
+		}
+	}
+	m.ws = out
+	m.mu.Unlock()
+}
+
 var (
 	mu         sync.Mutex
 	base       = &multi{ws: []io.Writer{os.Stderr}}
 	buf        *bufio.Writer
 	logger     *log.Logger
 	flushTimer *time.Ticker
+	flushStop  chan struct{}
 	insta      bool
 )
 
@@ -105,12 +139,36 @@ func SetInstaflush(v bool) {
 	rebuildLocked()
 }
 
-func Flush() {
-	mu.Lock()
-	defer mu.Unlock()
+func flushLocked() {
 	if buf != nil {
 		_ = buf.Flush()
 	}
+}
+
+func Flush() {
+	mu.Lock()
+	defer mu.Unlock()
+	flushLocked()
+}
+
+func StartCapture(w io.Writer) {
+	if w == nil {
+		return
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	flushLocked()
+	base.add(w)
+}
+
+func StopCapture(w io.Writer) {
+	if w == nil {
+		return
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	flushLocked()
+	base.remove(w)
 }
 
 func InitErrorFile(path string) error {
@@ -275,21 +333,31 @@ func rebuildLocked() {
 func startFlusherLocked() {
 	stopFlusherLocked()
 	flushTimer = time.NewTicker(2 * time.Second)
-	go func(t *time.Ticker) {
-		for range t.C {
-			mu.Lock()
-			if buf != nil {
-				_ = buf.Flush()
+	flushStop = make(chan struct{})
+	go func(t *time.Ticker, stop chan struct{}) {
+		for {
+			select {
+			case <-stop:
+				return
+			case <-t.C:
+				mu.Lock()
+				if buf != nil {
+					_ = buf.Flush()
+				}
+				mu.Unlock()
 			}
-			mu.Unlock()
 		}
-	}(flushTimer)
+	}(flushTimer, flushStop)
 }
 
 func stopFlusherLocked() {
 	if flushTimer != nil {
 		flushTimer.Stop()
 		flushTimer = nil
+	}
+	if flushStop != nil {
+		close(flushStop)
+		flushStop = nil
 	}
 }
 

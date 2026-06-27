@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/daniellavrushin/b4/config"
-	"github.com/daniellavrushin/b4/engine"
 	"github.com/daniellavrushin/b4/log"
 )
 
@@ -25,78 +24,6 @@ type IPTablesManager struct {
 
 func NewIPTablesManager(cfg *config.Config, useLegacy bool) *IPTablesManager {
 	return &IPTablesManager{cfg: cfg, useLegacy: useLegacy, multiportSupport: make(map[string]bool), connbytesSupport: make(map[string]error)}
-}
-
-func (im *IPTablesManager) ApplyMasquerade() error {
-	if !im.cfg.System.Tables.Masquerade {
-		return nil
-	}
-
-	iptBin := im.iptablesBin()
-	masqSpec := []string{"-j", "MASQUERADE"}
-	if iface := im.cfg.System.Tables.MasqueradeInterface; iface != "" {
-		masqSpec = []string{"-o", iface, "-j", "MASQUERADE"}
-	}
-
-	returnSpec := []string{"-m", "mark", "--mark", im.masqClientMark(), "-j", "RETURN"}
-	checkRet := append([]string{iptBin, "-w", "-t", "nat", "-C", "POSTROUTING"}, returnSpec...)
-	if _, err := run(checkRet...); err != nil {
-		insRet := append([]string{iptBin, "-w", "-t", "nat", "-I", "POSTROUTING"}, returnSpec...)
-		if _, err := run(insRet...); err != nil {
-			return fmt.Errorf("failed to add masquerade mark-bypass rule: %w", err)
-		}
-	}
-
-	checkArgs := append([]string{iptBin, "-w", "-t", "nat", "-C", "POSTROUTING"}, masqSpec...)
-	if _, err := run(checkArgs...); err == nil {
-		return nil
-	}
-
-	addArgs := append([]string{iptBin, "-w", "-t", "nat", "-A", "POSTROUTING"}, masqSpec...)
-	if _, err := run(addArgs...); err != nil {
-		return fmt.Errorf("failed to add masquerade rule: %w", err)
-	}
-
-	iface := im.cfg.System.Tables.MasqueradeInterface
-	if iface == "" {
-		iface = "all"
-	}
-	log.Infof("IPTABLES: masquerade enabled (interface: %s)", iface)
-	return nil
-}
-
-func (im *IPTablesManager) ClearMasquerade() {
-	iptBin := im.iptablesBin()
-	args := []string{iptBin, "-w", "-t", "nat", "-D", "POSTROUTING"}
-	if iface := im.cfg.System.Tables.MasqueradeInterface; iface != "" {
-		args = append(args, "-o", iface)
-	}
-	args = append(args, "-j", "MASQUERADE")
-	for {
-		if _, err := run(args...); err != nil {
-			break
-		}
-	}
-
-	for _, mk := range []string{im.masqClientMark(), im.masqMarkAccept()} {
-		retArgs := []string{iptBin, "-w", "-t", "nat", "-D", "POSTROUTING", "-m", "mark", "--mark", mk, "-j", "RETURN"}
-		for {
-			if _, err := run(retArgs...); err != nil {
-				break
-			}
-		}
-	}
-}
-
-func (im *IPTablesManager) masqMarkAccept() string {
-	if im.cfg.Queue.Mark == 0 {
-		return "0x8000/0x8000"
-	}
-	return fmt.Sprintf("0x%x/0x%x", im.cfg.Queue.Mark, im.cfg.Queue.Mark)
-}
-
-func (im *IPTablesManager) masqClientMark() string {
-	return fmt.Sprintf("0x%x/0x%x", engine.ClientMark, engine.ClientMark)
 }
 
 func (im *IPTablesManager) iptablesBin() string {
@@ -413,7 +340,6 @@ func (manager *IPTablesManager) buildManifest() (Manifest, error) {
 	if cfg.Queue.Mark == 0 {
 		markAccept = "0x8000/0x8000"
 	}
-	markClient := fmt.Sprintf("0x%x/0x%x", engine.ClientMark, engine.ClientMark)
 
 	var ipsets []IPSet
 	var chains []Chain
@@ -652,16 +578,11 @@ func (manager *IPTablesManager) buildManifest() (Manifest, error) {
 		)
 	}
 
-	if cfg.System.Tables.Masquerade {
+	if cfg.System.Tables.Masquerade.Enabled {
 		for _, ipt := range ipts {
-			masqSpec := []string{"-j", "MASQUERADE"}
-			if iface := cfg.System.Tables.MasqueradeInterface; iface != "" {
-				masqSpec = []string{"-o", iface, "-j", "MASQUERADE"}
-			}
-			rules = append(rules,
-				Rule{manager: manager, IPT: ipt, Table: "nat", Chain: "POSTROUTING", Action: "I", Spec: []string{"-m", "mark", "--mark", markClient, "-j", "RETURN"}},
-				Rule{manager: manager, IPT: ipt, Table: "nat", Chain: "POSTROUTING", Action: "A", Spec: masqSpec},
-			)
+			mc, mr := manager.buildMasqueradeManifest(ipt)
+			chains = append(chains, mc...)
+			rules = append(rules, mr...)
 		}
 	}
 
@@ -838,6 +759,9 @@ func (ipt *IPTablesManager) Clear() error {
 	m.RemoveRules()
 	time.Sleep(30 * time.Millisecond)
 	m.RemoveChains()
+	for _, bin := range ipt.masqueradeBinaries() {
+		ipt.teardownMasqueradeChain(bin)
+	}
 	m.DestroyIPSets()
 	destroyOrphanMSSIPSets()
 	m.RevertSysctls()
@@ -964,6 +888,26 @@ func (ipt *IPTablesManager) clearB4JumpRules() {
 			}
 		}
 
+		for {
+			out, _ := run(iptBin, "-w", "-t", "mangle", "--line-numbers", "-nL", "OUTPUT")
+			lines := strings.Split(out, "\n")
+			removed := false
+			for _, line := range lines {
+				if strings.Contains(line, "spt:53") && strings.Contains(line, "NFQUEUE") {
+					parts := strings.Fields(line)
+					if len(parts) > 0 {
+						if _, err := run(iptBin, "-w", "-t", "mangle", "-D", "OUTPUT", parts[0]); err == nil {
+							removed = true
+							break
+						}
+					}
+				}
+			}
+			if !removed {
+				break
+			}
+		}
+
 		// Clean nat POSTROUTING masquerade rules
 		for {
 			_, err := run(iptBin, "-w", "-t", "nat", "-D", "POSTROUTING", "-j", "MASQUERADE")
@@ -971,7 +915,7 @@ func (ipt *IPTablesManager) clearB4JumpRules() {
 				break
 			}
 		}
-		if iface := ipt.cfg.System.Tables.MasqueradeInterface; iface != "" {
+		for _, iface := range ipt.cfg.System.Tables.Masquerade.Interfaces {
 			for {
 				_, err := run(iptBin, "-w", "-t", "nat", "-D", "POSTROUTING", "-o", iface, "-j", "MASQUERADE")
 				if err != nil {

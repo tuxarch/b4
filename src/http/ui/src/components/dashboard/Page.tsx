@@ -13,6 +13,7 @@ import { DeviceActivity } from "./DeviceActivity";
 import { Escalations } from "./Escalations";
 import { Blackhole } from "./Blackhole";
 import { UnmatchedDomains } from "./UnmatchedDomains";
+import { RuntimeHealth } from "./RuntimeHealth";
 import { useTranslation } from "react-i18next";
 import { useDashboardSets } from "@hooks/useDashboardSets";
 import { wsUrl } from "@utils";
@@ -31,6 +32,7 @@ export interface Metrics {
   blocked_devices: Record<string, number>;
   connection_rate: { timestamp: number; value: number }[];
   packet_rate: { timestamp: number; value: number }[];
+  byte_rate: { timestamp: number; value: number }[];
   top_domains: Record<string, number>;
   protocol_dist: Record<string, number>;
   geo_dist: Record<string, number>;
@@ -44,6 +46,10 @@ export interface Metrics {
     num_gc: number;
     heap_alloc: number;
     heap_inuse: number;
+    heap_sys: number;
+    rss: number;
+    goroutines: number;
+    open_fds: number;
     percent: number;
   };
   worker_status: Array<{
@@ -72,6 +78,7 @@ export interface Metrics {
   domain_tls: Record<string, string>;
   current_cps: number;
   current_pps: number;
+  current_bps: number;
   escalations: EscalationEntry[];
   total_escalations: number;
 }
@@ -109,6 +116,7 @@ const normalizeMetrics = (data: null | Metrics): Metrics => {
       blocked_devices: {},
       connection_rate: [],
       packet_rate: [],
+      byte_rate: [],
       top_domains: {},
       protocol_dist: {},
       geo_dist: {},
@@ -122,6 +130,10 @@ const normalizeMetrics = (data: null | Metrics): Metrics => {
         num_gc: 0,
         heap_alloc: 0,
         heap_inuse: 0,
+        heap_sys: 0,
+        rss: 0,
+        goroutines: 0,
+        open_fds: 0,
         percent: 0,
       },
       worker_status: [],
@@ -133,6 +145,7 @@ const normalizeMetrics = (data: null | Metrics): Metrics => {
       domain_tls: {},
       current_cps: 0,
       current_pps: 0,
+      current_bps: 0,
       escalations: [],
       total_escalations: 0,
     };
@@ -180,6 +193,12 @@ const normalizeMetrics = (data: null | Metrics): Metrics => {
           value: safeNumber(item?.value),
         }))
       : [],
+    byte_rate: Array.isArray(data.byte_rate)
+      ? data.byte_rate.map((item: { timestamp: number; value: number }) => ({
+          timestamp: safeNumber(item?.timestamp),
+          value: safeNumber(item?.value),
+        }))
+      : [],
     top_domains:
       data.top_domains && typeof data.top_domains === "object"
         ? Object.fromEntries(
@@ -217,6 +236,10 @@ const normalizeMetrics = (data: null | Metrics): Metrics => {
       num_gc: safeNumber(data?.memory_usage?.num_gc),
       heap_alloc: safeNumber(data?.memory_usage?.heap_alloc),
       heap_inuse: safeNumber(data?.memory_usage?.heap_inuse),
+      heap_sys: safeNumber(data?.memory_usage?.heap_sys),
+      rss: safeNumber(data?.memory_usage?.rss),
+      goroutines: safeNumber(data?.memory_usage?.goroutines),
+      open_fds: safeNumber(data?.memory_usage?.open_fds),
       percent: safeNumber(data?.memory_usage?.percent),
     },
     worker_status: Array.isArray(data.worker_status)
@@ -288,6 +311,7 @@ const normalizeMetrics = (data: null | Metrics): Metrics => {
         : {},
     current_cps: safeNumber(data.current_cps),
     current_pps: safeNumber(data.current_pps),
+    current_bps: safeNumber(data.current_bps),
     escalations: normalizeEscalations(data.escalations),
     total_escalations: safeNumber(data.total_escalations),
   };
@@ -370,6 +394,10 @@ export function DashboardPage() {
       <HealthBanner metrics={metrics} connected={connected} />
 
       <Box sx={{ mb: 1.5 }}>
+        <RuntimeHealth metrics={metrics} />
+      </Box>
+
+      <Box sx={{ mb: 1.5 }}>
         <LiveSignal metrics={metrics} />
       </Box>
 
@@ -379,7 +407,7 @@ export function DashboardPage() {
         </Box>
       )}
 
-      <Grid container spacing={1.5} sx={{ mb: 1.5 }} alignItems="stretch">
+      <Grid container spacing={1.5} sx={{ mb: 1.5 }} alignItems="flex-start">
         {hasDevices && (
           <Grid size={{ xs: 12, xl: 6 }} sx={{ display: "flex" }}>
             <Box sx={{ width: "100%" }}>

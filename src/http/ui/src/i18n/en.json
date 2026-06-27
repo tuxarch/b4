@@ -198,8 +198,8 @@
       "tunDeviceNameHelp": "Name of the virtual interface b4 creates.",
       "natMasquerade": "NAT Masquerade",
       "natMasqueradeDesc": "Enable NAT masquerade for container/gateway setups",
-      "masqueradeInterface": "Masquerade Interface",
-      "masqueradeInterfaceDesc": "Select output interface for masquerade (empty = all interfaces)",
+      "masqueradeInterface": "Masquerade Interfaces",
+      "masqueradeInterfaceDesc": "Rewrite the source address (NAT) only on these outgoing interfaces — typically your internet uplinks (WAN). Others, like your LAN, are left untouched. None selected = all interfaces.",
       "noInterfacesDetected": "No interfaces detected",
       "masqueradeAllInterfaces": "Masquerade will apply to all output interfaces if none is selected.",
       "networkInterfaces": "Network Interfaces",
@@ -635,6 +635,7 @@
     "loading": "Loading dashboard...",
     "connectionRate": "Connection Rate",
     "connectionRateLegend": "conn / s · last 60s",
+    "throughputLegend": "throughput · last 60s",
     "signal": {
       "title": "Live Signal",
       "cps": "c/s",
@@ -647,7 +648,22 @@
       "packets": "Packets",
       "pktPerSec": "pkt/s",
       "rstDropped": "RST Dropped",
+      "throughput": "Throughput",
+      "processed": "processed",
+      "active": "Active flows",
+      "liveNow": "live now",
       "idle": "idle"
+    },
+    "runtime": {
+      "title": "Runtime",
+      "rss": "Resident (RSS)",
+      "offHeap": "off-heap",
+      "heap": "Go heap",
+      "reserved": "reserved",
+      "goroutines": "Goroutines",
+      "goroutinesHint": "flat line is healthy",
+      "openFds": "Open FDs",
+      "gc": "GC cycles"
     },
     "blackhole": {
       "title": "Blackhole",
@@ -1790,7 +1806,19 @@
     "streamingLabel": "Streaming",
     "clearLogs": "Clear Logs",
     "waitingForLogs": "Waiting for logs...",
-    "noMatch": "No logs match your filter"
+    "noMatch": "No logs match your filter",
+    "trace": {
+      "start": "Start trace",
+      "startHint": "Record all logs to a file until you stop",
+      "stop": "Stop & save",
+      "recording": "REC",
+      "downloadLast": "Download last trace",
+      "started": "Trace started — reproduce the issue, then stop",
+      "saved": "Trace saved",
+      "startFailed": "Failed to start trace",
+      "stopFailed": "Failed to stop trace",
+      "downloadFailed": "Failed to download trace"
+    }
   },
   "login": {
     "subtitle": "Sign in to continue",
@@ -1835,6 +1863,9 @@
   "watchdog": {
     "title": "Watchdog Monitor",
     "description": "Domain health monitoring and automatic healing",
+    "alert": "<strong>Watchdog:</strong> Continuously monitors configured domains and, when a connection degrades, runs discovery to automatically heal it with a working bypass strategy. Failures are classified to tell DPI interference apart from genuine server-side rejection (e.g. servers that require a client certificate).",
+    "inspiredBy": "Reactive detection approach inspired by",
+    "project": "project",
     "enabled": "Enabled",
     "disabled": "Disabled",
     "issues": "issues",

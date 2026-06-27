@@ -1,35 +1,67 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Box,
-  Container,
-  IconButton,
-  Paper,
-  Stack,
-  Typography,
-} from "@mui/material";
-import { ClearIcon, ArrowDownIcon } from "@b4.icons";
+import { Box, Container, Paper, Stack } from "@mui/material";
+import { ClearIcon } from "@b4.icons";
 import { B4Badge, B4TextField, B4Switch, B4TooltipButton } from "@b4.elements";
-import { colors, fonts, glows } from "@design";
+import { colors } from "@design";
 import { useWebSocket } from "@context/B4WsProvider";
 import { useSnackbar } from "@context/SnackbarProvider";
 import { useTranslation } from "react-i18next";
 import i18n from "@/i18n";
+import { useTraceSession } from "@hooks/useTraceSession";
+import {
+  LogLevel,
+  LOG_LEVELS,
+  loadEnabledLevels,
+  parseLogLine,
+  saveEnabledLevels,
+} from "./parse";
+import { LevelFilterBar } from "./LevelFilterBar";
+import { LogViewport } from "./LogViewport";
+import { TraceControls } from "./TraceControls";
 
 export function LogsPage() {
   const { t } = useTranslation();
   const { showSuccess } = useSnackbar();
   const [filter, setFilter] = useState("");
+  const [enabledLevels, setEnabledLevels] =
+    useState<Set<LogLevel>>(loadEnabledLevels);
   const [autoScroll, setAutoScroll] = useState(true);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const logRef = useRef<HTMLDivElement | null>(null);
   const { logs, pauseLogs, setPauseLogs, clearLogs } = useWebSocket();
+  const trace = useTraceSession();
+
+  const parsed = useMemo(() => logs.map(parseLogLine), [logs]);
+
+  const levelCounts = useMemo(() => {
+    const counts: Record<LogLevel, number> = {
+      error: 0,
+      warn: 0,
+      info: 0,
+      trace: 0,
+      debug: 0,
+    };
+    for (const line of parsed) {
+      if (line.level) counts[line.level]++;
+    }
+    return counts;
+  }, [parsed]);
+
+  const filtered = useMemo(() => {
+    const f = filter.trim().toLowerCase();
+    return parsed.filter((line) => {
+      if (line.level && !enabledLevels.has(line.level)) return false;
+      if (f && !line.raw.toLowerCase().includes(f)) return false;
+      return true;
+    });
+  }, [parsed, filter, enabledLevels]);
 
   useEffect(() => {
     const el = logRef.current;
     if (el && autoScroll) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [logs, autoScroll]);
+  }, [filtered, autoScroll]);
 
   const handleScroll = () => {
     const el = logRef.current;
@@ -49,10 +81,21 @@ export function LogsPage() {
     }
   };
 
-  const filtered = useMemo(() => {
-    const f = filter.trim().toLowerCase();
-    return f ? logs.filter((l) => l.toLowerCase().includes(f)) : logs;
-  }, [logs, filter]);
+  useEffect(() => {
+    saveEnabledLevels(enabledLevels);
+  }, [enabledLevels]);
+
+  const toggleLevel = (level: LogLevel) => {
+    setEnabledLevels((prev) => {
+      const next = new Set(prev);
+      if (next.has(level)) {
+        next.delete(level);
+      } else {
+        next.add(level);
+      }
+      return next;
+    });
+  };
 
   const handleHotkeysDown = useCallback(
     (e: KeyboardEvent) => {
@@ -106,11 +149,14 @@ export function LogsPage() {
           flexDirection: "column",
           overflow: "hidden",
           border: "1px solid",
-          borderColor: pauseLogs ? colors.border.strong : colors.border.default,
+          borderColor: trace.tracing
+            ? colors.state.error
+            : pauseLogs
+              ? colors.border.strong
+              : colors.border.default,
           transition: "border-color 0.3s",
         }}
       >
-        {/* Controls Bar */}
         <Box
           sx={{
             p: 2,
@@ -130,13 +176,27 @@ export function LogsPage() {
                 label={t("core.lines", { count: logs.length })}
                 size="small"
               />
-              {filter && (
+              {(filter || enabledLevels.size < LOG_LEVELS.length) && (
                 <B4Badge
                   label={t("core.filtered", { count: filtered.length })}
                   size="small"
                 />
               )}
             </Stack>
+
+            <Box sx={{ flexGrow: 1 }} />
+
+            <TraceControls
+              tracing={trace.tracing}
+              traceBusy={trace.traceBusy}
+              traceLines={trace.traceLines}
+              traceElapsed={trace.traceElapsed}
+              downloadReady={trace.downloadReady}
+              onStart={trace.startTrace}
+              onStop={trace.stopTrace}
+              onDownload={trace.downloadTrace}
+            />
+
             <B4Switch
               label={
                 pauseLogs ? t("logs.pausedLabel") : t("logs.streamingLabel")
@@ -150,90 +210,22 @@ export function LogsPage() {
               icon={<ClearIcon />}
             />
           </Stack>
+
+          <LevelFilterBar
+            enabledLevels={enabledLevels}
+            levelCounts={levelCounts}
+            onToggle={toggleLevel}
+          />
         </Box>
 
-        <Box
-          ref={logRef}
+        <LogViewport
+          totalCount={logs.length}
+          filtered={filtered}
+          showScrollBtn={showScrollBtn}
+          scrollRef={logRef}
           onScroll={handleScroll}
-          sx={{
-            flex: 1,
-            overflowY: "auto",
-            position: "relative",
-            p: 2,
-            fontFamily: fonts.mono,
-            fontSize: 12.5,
-            lineHeight: 1.7,
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-            backgroundColor: colors.background.dark,
-            color: colors.text.primary,
-          }}
-        >
-          {(() => {
-            if (filtered.length === 0 && logs.length === 0) {
-              return (
-                <Typography
-                  sx={{
-                    color: colors.text.secondary,
-                    textAlign: "center",
-                    mt: 4,
-                    fontStyle: "italic",
-                  }}
-                >
-                  {t("logs.waitingForLogs")}
-                </Typography>
-              );
-            } else if (filtered.length === 0) {
-              return (
-                <Typography
-                  sx={{
-                    color: colors.text.secondary,
-                    textAlign: "center",
-                    mt: 4,
-                    fontStyle: "italic",
-                  }}
-                >
-                  {t("logs.noMatch")}
-                </Typography>
-              );
-            } else {
-              return filtered.map((l, i) => (
-                <Typography
-                  key={l + "_" + i}
-                  component="div"
-                  sx={{
-                    fontFamily: "inherit",
-                    fontSize: "inherit",
-                    "&:hover": {
-                      bgcolor: colors.accent.primaryStrong,
-                    },
-                  }}
-                >
-                  {l}
-                </Typography>
-              ));
-            }
-          })()}
-
-          {/* Scroll to Bottom Button */}
-          {showScrollBtn && (
-            <IconButton
-              onClick={scrollToBottom}
-              sx={{
-                position: "absolute",
-                bottom: 16,
-                right: 16,
-                bgcolor: colors.primary,
-                color: colors.text.primary,
-                boxShadow: glows.primary,
-                "&:hover": { bgcolor: colors.tertiary },
-              }}
-              size="small"
-            >
-              <ArrowDownIcon />
-            </IconButton>
-          )}
-        </Box>
+          onScrollToBottom={scrollToBottom}
+        />
       </Paper>
     </Container>
   );
