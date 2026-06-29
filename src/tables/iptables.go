@@ -20,10 +20,11 @@ type IPTablesManager struct {
 	useLegacy        bool
 	multiportSupport map[string]bool  // per-binary cache (iptables vs ip6tables may differ)
 	connbytesSupport map[string]error // per-binary cache
+	connmarkSupport  map[string]bool  // per-binary cache
 }
 
 func NewIPTablesManager(cfg *config.Config, useLegacy bool) *IPTablesManager {
-	return &IPTablesManager{cfg: cfg, useLegacy: useLegacy, multiportSupport: make(map[string]bool), connbytesSupport: make(map[string]error)}
+	return &IPTablesManager{cfg: cfg, useLegacy: useLegacy, multiportSupport: make(map[string]bool), connbytesSupport: make(map[string]error), connmarkSupport: make(map[string]bool)}
 }
 
 func (im *IPTablesManager) iptablesBin() string {
@@ -45,7 +46,7 @@ func (im *IPTablesManager) checkConnbytesSupport(ipt string) error {
 		return err
 	}
 
-	supported, probeErr := im.probeModuleInTempChain(ipt, []string{"-p", "tcp", "-m", "connbytes", "--connbytes-dir", "original",
+	supported, probeErr := im.probeModuleInTempChain(ipt, "filter", []string{"-p", "tcp", "-m", "connbytes", "--connbytes-dir", "original",
 		"--connbytes-mode", "packets", "--connbytes", "0:10", "-j", "ACCEPT"})
 	if supported {
 		im.connbytesSupport[ipt] = nil
@@ -64,7 +65,7 @@ func (im *IPTablesManager) hasMultiportSupport(ipt string) bool {
 		return result
 	}
 
-	supported, _ := im.probeModuleInTempChain(ipt, []string{"-p", "tcp", "-m", "multiport", "--dports", "80,443", "-j", "ACCEPT"})
+	supported, _ := im.probeModuleInTempChain(ipt, "filter", []string{"-p", "tcp", "-m", "multiport", "--dports", "80,443", "-j", "ACCEPT"})
 	im.multiportSupport[ipt] = supported
 	if supported {
 		log.Tracef("IPTABLES[%s]: multiport module is available", ipt)
@@ -74,20 +75,40 @@ func (im *IPTablesManager) hasMultiportSupport(ipt string) bool {
 	return supported
 }
 
+func (im *IPTablesManager) hasConnmarkSupport(ipt string) bool {
+	if result, ok := im.connmarkSupport[ipt]; ok {
+		return result
+	}
+
+	matchOK, _ := im.probeModuleInTempChain(ipt, "mangle", []string{"-m", "connmark", "--mark", "0x8000/0x8000", "-j", "RETURN"})
+	targetOK, _ := im.probeModuleInTempChain(ipt, "mangle", []string{"-j", "CONNMARK", "--save-mark", "--nfmask", "0x8000", "--ctmask", "0x8000"})
+	supported := matchOK && targetOK
+	im.connmarkSupport[ipt] = supported
+	if supported {
+		log.Tracef("IPTABLES[%s]: connmark module is available", ipt)
+	} else {
+		log.Warnf("IPTABLES[%s]: connmark module not available; b4's own marked connections (e.g. MTProto WS bridge upstream) will not be exempted from reply-side processing", ipt)
+	}
+	return supported
+}
+
 // probeModuleInTempChain tests whether a rule spec is accepted by iptables
-// using a temporary chain, so the probe never touches live traffic.
-func (im *IPTablesManager) probeModuleInTempChain(ipt string, testSpec []string) (bool, error) {
+// using a temporary chain in the given table, so the probe never touches live
+// traffic. Probe in the table where the rule will actually be installed - some
+// targets (e.g. TPROXY) are table-restricted, so probing in the wrong table can
+// yield a false negative.
+func (im *IPTablesManager) probeModuleInTempChain(ipt, table string, testSpec []string) (bool, error) {
 	const tmpChain = "B4_MODULE_TEST"
-	_, _ = run(ipt, "-w", "-t", "filter", "-F", tmpChain)
-	_, _ = run(ipt, "-w", "-t", "filter", "-X", tmpChain)
-	if _, err := run(ipt, "-w", "-t", "filter", "-N", tmpChain); err != nil {
+	_, _ = run(ipt, "-w", "-t", table, "-F", tmpChain)
+	_, _ = run(ipt, "-w", "-t", table, "-X", tmpChain)
+	if _, err := run(ipt, "-w", "-t", table, "-N", tmpChain); err != nil {
 		return false, fmt.Errorf("could not create probe chain %s: %w", tmpChain, err)
 	}
 	defer func() {
-		_, _ = run(ipt, "-w", "-t", "filter", "-F", tmpChain)
-		_, _ = run(ipt, "-w", "-t", "filter", "-X", tmpChain)
+		_, _ = run(ipt, "-w", "-t", table, "-F", tmpChain)
+		_, _ = run(ipt, "-w", "-t", table, "-X", tmpChain)
 	}()
-	_, err := run(append([]string{ipt, "-w", "-t", "filter", "-A", tmpChain}, testSpec...)...)
+	_, err := run(append([]string{ipt, "-w", "-t", table, "-A", tmpChain}, testSpec...)...)
 	return err == nil, err
 }
 
@@ -576,6 +597,17 @@ func (manager *IPTablesManager) buildManifest() (Manifest, error) {
 			Rule{manager: manager, IPT: ipt, Table: "mangle", Chain: "OUTPUT", Action: "A",
 				Spec: []string{"-j", chainName}},
 		)
+
+		if cfg.Queue.Mark != 0 && manager.hasConnmarkSupport(ipt) {
+			markMaskHex := fmt.Sprintf("0x%x", cfg.Queue.Mark)
+			rules = append(rules,
+				Rule{manager: manager, IPT: ipt, Table: "mangle", Chain: "OUTPUT", Action: "I",
+					Spec: []string{"-m", "mark", "--mark", markAccept, "-j", "CONNMARK",
+						"--save-mark", "--nfmask", markMaskHex, "--ctmask", markMaskHex}},
+				Rule{manager: manager, IPT: ipt, Table: "mangle", Chain: preChainName, Action: "I",
+					Spec: []string{"-m", "connmark", "--mark", markAccept, "-j", "RETURN"}},
+			)
+		}
 	}
 
 	if cfg.System.Tables.Masquerade.Enabled {
