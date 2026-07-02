@@ -184,6 +184,11 @@ func (c *Config) Validate() error {
 			}
 		}
 
+		if set.Targets.DomainOnly && set.Routing.Enabled &&
+			(len(set.Targets.SNIDomains) > 0 || len(set.Targets.GeoSiteCategories) > 0) {
+			log.Warnf("Set '%s' has both domain-only matching and routing enabled: the IPs behind its domains will not be routed (only explicitly listed IP targets are routed)", set.Name)
+		}
+
 		if set.TCP.ConnBytesLimit > c.Queue.TCPConnBytesLimit {
 			set.TCP.ConnBytesLimit = c.Queue.TCPConnBytesLimit
 		}
@@ -211,11 +216,11 @@ func (c *Config) Validate() error {
 				set.MSSClamp.Size = 1460
 			}
 			hasIPScope := len(set.Targets.IPs) > 0 || len(set.Targets.GeoIpCategories) > 0
-			hasMACScope := len(set.Targets.SourceDevices) > 0
+			hasMACScope := len(set.Targets.SourceDevices) > 0 && !set.Targets.SourceDevicesExclude
 			if !hasIPScope && !hasMACScope {
 				v.addf(fmt.Sprintf("sets[%d].mss_clamp", setIdx), "mss_clamp_scope_required",
 					map[string]any{"set": set.Name},
-					"set %q: MSS clamp requires IP, GeoIP, or source device targets (MSS is set on SYN, before SNI/GeoSite can match)", set.Name)
+					"set %q: MSS clamp requires IP, GeoIP, or included source device targets (MSS is set on SYN, before SNI/GeoSite can match; excluded devices cannot scope it)", set.Name)
 				return v.result()
 			}
 		}

@@ -100,6 +100,8 @@ export interface TargetsConfig {
   geosite_categories: string[];
   geoip_categories: string[];
   source_devices?: string[];
+  source_devices_exclude?: boolean;
+  domain_only?: boolean;
   tls?: string;
   ip_version?: string;
 }
@@ -305,12 +307,20 @@ export interface Socks5Config {
   udp_read_timeout: number;
 }
 
+export interface MTProtoSecret {
+  id: string;
+  name: string;
+  secret: string;
+  enabled: boolean;
+}
+
 export interface MTProtoConfig {
   enabled: boolean;
   port: number;
   bind_address: string;
   max_connections: number;
   secret: string;
+  secrets?: MTProtoSecret[];
   fake_sni: string;
   dc_relay: string;
   upstream_mode: "tcp" | "ws" | "auto";

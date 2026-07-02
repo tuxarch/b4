@@ -77,9 +77,16 @@ func (e *ipRange) Network() net.IPNet {
 }
 
 func NewSuffixSet(sets []*config.SetConfig) *SuffixSet {
+	totalDomains := 0
+	for _, set := range sets {
+		if set.Enabled {
+			totalDomains += len(set.Targets.DomainsToMatch)
+		}
+	}
+
 	s := &SuffixSet{
-		sets:      make(map[string]*config.SetConfig),
-		multiSets: make(map[string][]*config.SetConfig),
+		sets:      make(map[string]*config.SetConfig, totalDomains),
+		multiSets: make(map[string][]*config.SetConfig, totalDomains),
 		regexes:   make([]*regexWithSet, 0),
 		ipRanger:  cidranger.NewPCTrieRanger(),
 
@@ -414,6 +421,9 @@ func (s *SuffixSet) LearnIPToDomain(ip net.IP, domain string, set *config.SetCon
 	if s == nil || ip == nil || domain == "" || set == nil {
 		return
 	}
+	if set.Targets.DomainOnly {
+		return
+	}
 
 	ipStr := ip.String()
 
@@ -459,12 +469,18 @@ func (s *SuffixSet) MatchLearnedIP(ip net.IP) (bool, *config.SetConfig, string) 
 	if !exists {
 		return false, nil, ""
 	}
+	if entry.set != nil && entry.set.Targets.DomainOnly {
+		return false, nil, ""
+	}
 
 	s.learnedIPCacheMu.Lock()
 	defer s.learnedIPCacheMu.Unlock()
 
 	entry, exists = s.learnedIPCache[ipStr]
 	if !exists {
+		return false, nil, ""
+	}
+	if entry.set != nil && entry.set.Targets.DomainOnly {
 		return false, nil, ""
 	}
 
@@ -549,15 +565,16 @@ func setMatchesSource(set *config.SetConfig, srcMAC string) bool {
 	if len(set.Targets.SourceDevices) == 0 {
 		return true
 	}
+	exclude := set.Targets.SourceDevicesExclude
 	if srcMAC == "" {
-		return false
+		return exclude
 	}
 	for _, mac := range set.Targets.SourceDevices {
 		if strings.EqualFold(mac, srcMAC) {
-			return true
+			return !exclude
 		}
 	}
-	return false
+	return exclude
 }
 
 func (s *SuffixSet) MatchSNIWithSource(host string, srcMAC string) (bool, *config.SetConfig) {
@@ -684,12 +701,18 @@ func (s *SuffixSet) MatchLearnedIPWithSource(ip net.IP, srcMAC string) (bool, *c
 	if !exists {
 		return false, nil, ""
 	}
+	if entry.set != nil && entry.set.Targets.DomainOnly {
+		return false, nil, ""
+	}
 
 	s.learnedIPCacheMu.Lock()
 	defer s.learnedIPCacheMu.Unlock()
 
 	entry, exists = s.learnedIPCache[ipStr]
 	if !exists {
+		return false, nil, ""
+	}
+	if entry.set != nil && entry.set.Targets.DomainOnly {
 		return false, nil, ""
 	}
 

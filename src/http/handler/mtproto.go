@@ -5,10 +5,13 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/daniellavrushin/b4/config"
 	"github.com/daniellavrushin/b4/log"
 	"github.com/daniellavrushin/b4/mtproto"
+	"github.com/google/uuid"
 )
 
 func (api *API) RegisterMTProtoApi() {
@@ -183,6 +186,20 @@ func (api *API) handleMTProtoConfig(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} map[string]interface{}
 // @Security BearerAuth
 // @Router /mtproto/config [post]
+// sanitizeSecretName strips control characters (newlines, CR, tab, other C0
+// controls and DEL) from a user-provided secret name so it cannot corrupt the
+// plain log lines it appears in. Commas are legal in names; the connection-log
+// emitter sanitizes every CSV field on write (log.emitConnection).
+func sanitizeSecretName(name string) string {
+	cleaned := strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, name)
+	return strings.TrimSpace(cleaned)
+}
+
 func (api *API) updateMTProtoConfig(w http.ResponseWriter, r *http.Request) {
 	var req config.MTProtoConfig
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -207,16 +224,43 @@ func (api *API) updateMTProtoConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Enabled && req.Secret == "" && req.FakeSNI == "" {
-		writeJsonError(w, http.StatusBadRequest, "Either secret or fake SNI domain is required when enabled")
-		return
+	for i := range req.Secrets {
+		s := &req.Secrets[i]
+		s.Name = sanitizeSecretName(s.Name)
+		s.Secret = strings.TrimSpace(s.Secret)
+		if s.Secret != "" {
+			if _, err := mtproto.ParseSecret(s.Secret); err != nil {
+				label := s.Name
+				if label == "" {
+					label = "#" + strconv.Itoa(i+1)
+				}
+				writeJsonError(w, http.StatusBadRequest, "Invalid secret "+label+": "+err.Error())
+				return
+			}
+		}
+		if s.ID == "" {
+			s.ID = uuid.NewString()
+		}
 	}
 
+	req.Secret = strings.TrimSpace(req.Secret)
 	if req.Secret != "" {
 		if _, err := mtproto.ParseSecret(req.Secret); err != nil {
 			writeJsonError(w, http.StatusBadRequest, "Invalid secret: "+err.Error())
 			return
 		}
+	}
+
+	// Keep the legacy single-secret field mirroring the first enabled entry so
+	// older clients and the share-link path stay consistent.
+	if len(req.Secrets) > 0 {
+		req.Secret = req.FirstEnabledSecret()
+	}
+
+	hasSecret := req.Secret != "" || len(req.EffectiveSecrets()) > 0
+	if req.Enabled && !hasSecret && req.FakeSNI == "" {
+		writeJsonError(w, http.StatusBadRequest, "At least one secret or a fake SNI domain is required when enabled")
+		return
 	}
 
 	if req.DCRelay != "" {

@@ -286,6 +286,16 @@
       "relaySetup": "DC Relay requires a VPS setup. <a href=\"https://daniellavrushin.github.io/b4/docs/mtproto\" target=\"_blank\">Read the setup guide</a>",
       "secret": "Secret",
       "secretHelp": "Paste this into Telegram MTProto proxy settings",
+      "secretsTitle": "Secrets",
+      "secretsDesc": "Create a separate secret per user so you can name, disable, or revoke access individually. The logs show which secret each connection used.",
+      "secretName": "Name / comment",
+      "secretNamePlaceholder": "e.g. Maxim",
+      "secretValuePlaceholder": "Paste or generate a secret",
+      "addSecret": "Add secret",
+      "removeSecret": "Remove secret",
+      "copySecret": "Copy secret",
+      "secretEnable": "Enable this secret",
+      "secretDisable": "Disable this secret",
       "generateSecret": "Generate Secret",
       "refreshDCs": "Refresh",
       "refreshDCsHint": "Telegram DC list is cached locally. Refresh if your connection started failing.",
@@ -679,6 +689,17 @@
       "topDevices": "Top Devices",
       "none": "no data yet"
     },
+    "mtproto": {
+      "title": "MTProto Proxy",
+      "active": "active",
+      "activeShort": "active",
+      "port": "port",
+      "sessions": "sessions",
+      "sessionsShort": "total",
+      "perUser": "Per user",
+      "unnamed": "unnamed",
+      "none": "no secrets configured"
+    },
     "health": {
       "running": "Running",
       "degraded": "Degraded",
@@ -792,6 +813,8 @@
       "ipVersionFilter": "IP Version Filter",
       "ipVersionAny": "Any",
       "ipVersionHelperText": "Prefer IPv4 or IPv6 traffic (used as a fallback when no exact-version match exists)",
+      "domainOnly": "Domain-only matching",
+      "domainOnlyDesc": "Do not learn or route IPs from these domains. Use this for shared CDN IPs where another domain on the same IP needs a different strategy.",
       "escalateTo": "Escalate to set",
       "escalateNone": "None",
       "escalateHelper": "If this set keeps failing for a site, b4 will use the chosen set for that site instead. After a while, b4 tries this set again.",
@@ -835,6 +858,9 @@
       "activeGeoipCategories": "Active Bypass GeoIP Categories",
       "deviceAlert": "Restrict this set to specific source devices. When devices are selected, this set will only apply to traffic from those devices. Device-specific sets take priority over general sets.",
       "selectedCount": "{{count}} selected",
+      "excludedCount": "{{count}} excluded",
+      "excludeDevices": "All devices except selected",
+      "excludeDevicesDesc": "Apply this set to traffic from all devices except the selected ones",
       "arpUnavailable": "ARP table not available. Device discovery is unavailable. Source device filtering requires a working ARP table.",
       "previewSubtitle": "Category Preview",
       "previewTotal": "Total domains in category: {{count}}",
@@ -1365,7 +1391,8 @@
       "flowCaption": "DNS queries for this set's domains are intercepted. Resolved IPs are routed through the selected output interface.",
       "howItWorks": "When a device on your network visits a matched domain, B4 intercepts the DNS response, learns the destination IP, and adds a routing rule so that traffic to that IP goes through the output interface you choose - for example, a VPN or a different WAN link.",
       "sourceInterfacesDesc": "Choose which network interfaces B4 should watch for traffic. For example, select your LAN or Wi-Fi bridge to only route traffic from devices on that network. Leave empty to route traffic from all interfaces.",
-      "ipTtlDesc": "After B4 learns an IP address from a DNS response, it keeps the routing rule for this many seconds. If the domain's IP changes (e.g. CDN rotation), the old rule expires and B4 picks up the new IP on the next DNS query."
+      "ipTtlDesc": "After B4 learns an IP address from a DNS response, it keeps the routing rule for this many seconds. If the domain's IP changes (e.g. CDN rotation), the old rule expires and B4 picks up the new IP on the next DNS query.",
+      "domainOnlyConflict": "Domain-only matching is enabled for this set, so the IP addresses behind its domains are not routed here - only IP addresses you list explicitly are. Turn off Domain-only matching to route these domains."
     },
     "importExport": {
       "sectionTitle": "Import/Export Set configuration",

@@ -90,6 +90,9 @@ func RoutingHandleDNS(cfg *config.Config, set *config.SetConfig, ips []net.IP) {
 	if cfg == nil || set == nil || !set.Routing.Enabled || len(ips) == 0 {
 		return
 	}
+	if set.Targets.DomainOnly {
+		return
+	}
 	mode := set.Routing.Mode
 	if mode == "" {
 		mode = config.RoutingModeInterface
@@ -747,17 +750,6 @@ func routePreResolveDomains(cfg *config.Config, sets []*config.SetConfig) {
 }
 
 func routeEnsureRule(be routeBackend, cfg *config.Config, set *config.SetConfig, st routeState, sources []string) error {
-	if cfg.Queue.IPv4Enabled {
-		if err := be.ensureIPSet(st.setV4, false); err != nil {
-			return err
-		}
-	}
-	if cfg.Queue.IPv6Enabled {
-		if err := be.ensureIPSet(st.setV6, true); err != nil {
-			return err
-		}
-	}
-
 	if err := be.ensureChain(st.chainPre, true); err != nil {
 		return err
 	}
@@ -771,6 +763,17 @@ func routeEnsureRule(be routeBackend, cfg *config.Config, set *config.SetConfig,
 	be.flushChain(st.chainPre, true)
 	be.flushChain(st.chainOut, true)
 	be.flushChain(st.chainSNAT, false)
+
+	if cfg.Queue.IPv4Enabled {
+		if err := be.ensureIPSet(st.setV4, false); err != nil {
+			return err
+		}
+	}
+	if cfg.Queue.IPv6Enabled {
+		if err := be.ensureIPSet(st.setV6, true); err != nil {
+			return err
+		}
+	}
 
 	queueMark := routeQueueBypassMark(cfg)
 	gate := routeSetDeviceGate(cfg, set)

@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -43,6 +44,7 @@ type MetricsCollector struct {
 	DomainTLS         map[string]string            `json:"domain_tls"`
 	Escalations       []EscalationEntry            `json:"escalations"`
 	TotalEscalations  uint64                       `json:"total_escalations"`
+	MTProto           *MTProtoStats                `json:"mtproto,omitempty"`
 
 	lastUpdate      time.Time    `json:"-"`
 	mu              sync.RWMutex `json:"-"`
@@ -99,6 +101,36 @@ type EscalationEntry struct {
 	Hops      int       `json:"hops"`
 	SetAt     time.Time `json:"set_at"`
 	ExpiresAt time.Time `json:"expires_at"`
+}
+
+type MTProtoStats struct {
+	Enabled           bool                `json:"enabled"`
+	Port              int                 `json:"port"`
+	ActiveConnections int64               `json:"active_connections"`
+	TotalConnections  int64               `json:"total_connections"`
+	BytesUp           int64               `json:"bytes_up"`
+	BytesDown         int64               `json:"bytes_down"`
+	Secrets           []MTProtoSecretStat `json:"secrets"`
+}
+
+type MTProtoSecretStat struct {
+	Name      string `json:"name"`
+	Active    int64  `json:"active"`
+	Total     int64  `json:"total"`
+	BytesUp   int64  `json:"bytes_up"`
+	BytesDown int64  `json:"bytes_down"`
+}
+
+var mtprotoStatsProvider atomic.Pointer[func() *MTProtoStats]
+
+// SetMTProtoStatsProvider registers a hook that GetSnapshot calls to attach
+// live MTProto proxy usage. Nil provider = no MTProto section in the snapshot.
+func SetMTProtoStatsProvider(fn func() *MTProtoStats) {
+	if fn == nil {
+		mtprotoStatsProvider.Store(nil)
+		return
+	}
+	mtprotoStatsProvider.Store(&fn)
 }
 
 var (
@@ -571,6 +603,10 @@ func (m *MetricsCollector) GetSnapshot() *MetricsCollector {
 	snapshot.ConnectionRate = smoothTimeSeriesData(m.ConnectionRate, 3)
 	snapshot.PacketRate = smoothTimeSeriesData(m.PacketRate, 3)
 	snapshot.BytesRate = smoothTimeSeriesData(m.BytesRate, 3)
+
+	if fn := mtprotoStatsProvider.Load(); fn != nil {
+		snapshot.MTProto = (*fn)()
+	}
 	return snapshot
 }
 

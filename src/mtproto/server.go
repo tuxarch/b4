@@ -7,12 +7,14 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/daniellavrushin/b4/config"
 	"github.com/daniellavrushin/b4/log"
+	"github.com/google/uuid"
 )
 
 const (
@@ -31,15 +33,220 @@ type Server struct {
 	bufPool sync.Pool
 	active  atomic.Int64
 
-	cfg    atomic.Pointer[config.Config]
-	secret atomic.Pointer[Secret]
-	wsPool atomic.Pointer[wsPool]
+	cfg     atomic.Pointer[config.Config]
+	secrets atomic.Pointer[[]*Secret]
+	wsPool  atomic.Pointer[wsPool]
+
+	statsMu sync.Mutex
+	stats   map[string]*secretStat
+
+	connsMu sync.Mutex
+	conns   map[string]*secretConnSet
 
 	mu       sync.Mutex
 	running  bool
 	listener net.Listener
 	ctx      context.Context
 	cancel   context.CancelFunc
+}
+
+type secretStat struct {
+	active atomic.Int64
+	total  atomic.Int64
+	up     atomic.Int64
+	down   atomic.Int64
+}
+
+type SecretStat struct {
+	Name      string
+	Active    int64
+	Total     int64
+	BytesUp   int64
+	BytesDown int64
+}
+
+type Stats struct {
+	Enabled           bool
+	Port              int
+	ActiveConnections int64
+	TotalConnections  int64
+	BytesUp           int64
+	BytesDown         int64
+	Secrets           []SecretStat
+}
+
+func (s *Server) secretStat(sec *Secret) *secretStat {
+	key := sec.ID
+	if key == "" {
+		key = sec.Label()
+	}
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	if s.stats == nil {
+		s.stats = make(map[string]*secretStat)
+	}
+	st := s.stats[key]
+	if st == nil {
+		st = &secretStat{}
+		s.stats[key] = st
+	}
+	return st
+}
+
+type secretConnSet struct {
+	label string
+	conns map[net.Conn]struct{}
+}
+
+func secretIdentity(sec *Secret) string {
+	key := sec.ID
+	if key == "" {
+		key = sec.Label()
+	}
+	return key + "|" + sec.Hex()
+}
+
+func (s *Server) trackConn(sec *Secret, c net.Conn) func() {
+	id := secretIdentity(sec)
+	s.connsMu.Lock()
+	if s.conns == nil {
+		s.conns = make(map[string]*secretConnSet)
+	}
+	set := s.conns[id]
+	if set == nil {
+		set = &secretConnSet{label: sec.Label(), conns: make(map[net.Conn]struct{})}
+		s.conns[id] = set
+	}
+	set.conns[c] = struct{}{}
+	s.connsMu.Unlock()
+	return func() {
+		s.connsMu.Lock()
+		if set := s.conns[id]; set != nil {
+			delete(set.conns, c)
+			if len(set.conns) == 0 {
+				delete(s.conns, id)
+			}
+		}
+		s.connsMu.Unlock()
+	}
+}
+
+func (s *Server) secretActive(sec *Secret) bool {
+	ptr := s.secrets.Load()
+	if ptr == nil {
+		return false
+	}
+	id := secretIdentity(sec)
+	for _, cur := range *ptr {
+		if secretIdentity(cur) == id {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) closeRevokedConns(active []*Secret) {
+	allowed := make(map[string]struct{}, len(active))
+	for _, sec := range active {
+		allowed[secretIdentity(sec)] = struct{}{}
+	}
+
+	type victim struct {
+		label string
+		conns []net.Conn
+	}
+	var victims []victim
+	s.connsMu.Lock()
+	for id, set := range s.conns {
+		if _, ok := allowed[id]; ok {
+			continue
+		}
+		v := victim{label: set.label, conns: make([]net.Conn, 0, len(set.conns))}
+		for c := range set.conns {
+			v.conns = append(v.conns, c)
+		}
+		victims = append(victims, v)
+	}
+	s.connsMu.Unlock()
+
+	for _, v := range victims {
+		for _, c := range v.conns {
+			_ = c.Close()
+		}
+		log.Infof("MTProto: closed %d active connection(s) for revoked secret %q", len(v.conns), v.label)
+	}
+}
+
+func (s *Server) pruneStats(active []*Secret) {
+	keep := make(map[string]struct{}, len(active))
+	for _, sec := range active {
+		key := sec.ID
+		if key == "" {
+			key = sec.Label()
+		}
+		keep[key] = struct{}{}
+	}
+	s.statsMu.Lock()
+	for k := range s.stats {
+		if _, ok := keep[k]; !ok {
+			delete(s.stats, k)
+		}
+	}
+	s.statsMu.Unlock()
+}
+
+func secretHosts(secrets []*Secret) string {
+	if len(secrets) == 0 {
+		return "none"
+	}
+	seen := make(map[string]struct{}, len(secrets))
+	hosts := make([]string, 0, len(secrets))
+	for _, sec := range secrets {
+		if _, ok := seen[sec.Host]; ok {
+			continue
+		}
+		seen[sec.Host] = struct{}{}
+		hosts = append(hosts, sec.Host)
+	}
+	return strings.Join(hosts, ",")
+}
+
+func (s *Server) Stats() Stats {
+	s.mu.Lock()
+	running := s.running
+	s.mu.Unlock()
+
+	out := Stats{Enabled: running}
+	if cfg := s.cfg.Load(); cfg != nil {
+		out.Port = cfg.System.MTProto.Port
+	}
+
+	secsPtr := s.secrets.Load()
+	if secsPtr == nil {
+		return out
+	}
+
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	for _, sec := range *secsPtr {
+		key := sec.ID
+		if key == "" {
+			key = sec.Label()
+		}
+		ss := SecretStat{Name: sec.Label()}
+		if st := s.stats[key]; st != nil {
+			ss.Active = st.active.Load()
+			ss.Total = st.total.Load()
+			ss.BytesUp = st.up.Load()
+			ss.BytesDown = st.down.Load()
+		}
+		out.Secrets = append(out.Secrets, ss)
+		out.ActiveConnections += ss.Active
+		out.TotalConnections += ss.Total
+		out.BytesUp += ss.BytesUp
+		out.BytesDown += ss.BytesDown
+	}
+	return out
 }
 
 func NewServer(cfg *config.Config) *Server {
@@ -61,6 +268,58 @@ func (s *Server) Start() error {
 	return s.startLocked()
 }
 
+func buildSecrets(cfg *config.Config) ([]*Secret, error) {
+	mtCfg := &cfg.System.MTProto
+
+	var secrets []*Secret
+	invalid := 0
+	for _, entry := range mtCfg.EffectiveSecrets() {
+		sec, err := ParseSecret(entry.Secret)
+		if err != nil {
+			invalid++
+			log.Warnf("MTProto: skipping invalid secret %q: %v", entry.Name, err)
+			continue
+		}
+		sec.ID = entry.ID
+		sec.Name = entry.Name
+		secrets = append(secrets, sec)
+	}
+	if len(secrets) > 0 {
+		return secrets, nil
+	}
+
+	if invalid > 0 {
+		return nil, fmt.Errorf("MTProto: %d configured secret(s), none valid", invalid)
+	}
+
+	if len(mtCfg.Secrets) > 0 || strings.TrimSpace(mtCfg.Secret) != "" {
+		return nil, nil
+	}
+
+	if mtCfg.FakeSNI == "" {
+		return nil, fmt.Errorf("MTProto: at least one secret or fake_sni must be configured")
+	}
+	sec, err := GenerateSecret(mtCfg.FakeSNI)
+	if err != nil {
+		return nil, fmt.Errorf("MTProto generate secret: %w", err)
+	}
+	entry := config.MTProtoSecret{ID: uuid.NewString(), Name: "default", Secret: sec.Hex(), Enabled: true}
+	sec.ID = entry.ID
+	sec.Name = entry.Name
+	mtCfg.Secrets = append(mtCfg.Secrets, entry)
+	mtCfg.Secret = sec.Hex()
+	if cfg.ConfigPath != "" {
+		if err := cfg.SaveToFile(cfg.ConfigPath); err != nil {
+			log.Warnf("MTProto: failed to persist generated secret: %v", err)
+		} else {
+			log.Infof("MTProto secret generated and saved")
+		}
+	} else {
+		log.Infof("MTProto secret generated")
+	}
+	return []*Secret{sec}, nil
+}
+
 func (s *Server) startLocked() error {
 	cfg := s.cfg.Load()
 	mtCfg := &cfg.System.MTProto
@@ -69,28 +328,9 @@ func (s *Server) startLocked() error {
 		return nil
 	}
 
-	var sec *Secret
-	if mtCfg.Secret != "" {
-		var err error
-		sec, err = ParseSecret(mtCfg.Secret)
-		if err != nil {
-			return fmt.Errorf("MTProto parse secret: %w", err)
-		}
-	} else if mtCfg.FakeSNI != "" {
-		var err error
-		sec, err = GenerateSecret(mtCfg.FakeSNI)
-		if err != nil {
-			return fmt.Errorf("MTProto generate secret: %w", err)
-		}
-		mtCfg.Secret = sec.Hex()
-		if cfg.ConfigPath != "" {
-			if err := cfg.SaveToFile(cfg.ConfigPath); err != nil {
-				log.Warnf("MTProto: failed to persist generated secret: %v", err)
-			}
-		}
-		log.Infof("MTProto secret generated and saved")
-	} else {
-		return fmt.Errorf("MTProto: either secret or fake_sni must be configured")
+	secrets, err := buildSecrets(cfg)
+	if err != nil {
+		return err
 	}
 
 	addr := net.JoinHostPort(mtCfg.BindAddress, strconv.Itoa(mtCfg.Port))
@@ -100,10 +340,12 @@ func (s *Server) startLocked() error {
 		return fmt.Errorf("MTProto listen: %w", err)
 	}
 	s.listener = ln
-	s.secret.Store(sec)
+	s.secrets.Store(&secrets)
+	s.closeRevokedConns(secrets)
+	s.pruneStats(secrets)
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 
-	log.Infof("MTProto proxy listening on %s (SNI: %s)", addr, sec.Host)
+	log.Infof("MTProto proxy listening on %s (SNI: %s, secrets: %d)", addr, secretHosts(secrets), len(secrets))
 
 	if mode := mtCfg.UpstreamMode; mode == "ws" || mode == "auto" || mode == "" {
 		wsResetState()
@@ -146,6 +388,18 @@ func (s *Server) stopLocked() error {
 	return err
 }
 
+func (s *Server) reloadSecretsLocked(cfg *config.Config) {
+	secrets, err := buildSecrets(cfg)
+	if err != nil {
+		log.Errorf("MTProto secrets reload failed: %v (keeping previous secrets)", err)
+		return
+	}
+	s.secrets.Store(&secrets)
+	s.closeRevokedConns(secrets)
+	s.pruneStats(secrets)
+	log.Infof("MTProto secrets reloaded live (%d active) without restart", len(secrets))
+}
+
 func (s *Server) UpdateConfig(newCfg *config.Config) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -154,6 +408,9 @@ func (s *Server) UpdateConfig(newCfg *config.Config) {
 	s.cfg.Store(newCfg)
 
 	if old != nil && !mtprotoNeedsRestart(old, newCfg) {
+		if s.running && mtprotoSecretsChanged(old.System.MTProto, newCfg.System.MTProto) {
+			s.reloadSecretsLocked(newCfg)
+		}
 		return
 	}
 
@@ -165,11 +422,13 @@ func (s *Server) UpdateConfig(newCfg *config.Config) {
 	if newCfg.System.MTProto.Enabled {
 		if err := s.startLocked(); err != nil {
 			log.Errorf("MTProto reload failed: %v (proxy stopped; fix in Settings)", err)
+			s.closeRevokedConns(nil)
 		} else {
 			log.Infof("MTProto reloaded with updated configuration")
 		}
 	} else if wasEnabled {
 		log.Infof("MTProto proxy stopped (disabled in configuration)")
+		s.closeRevokedConns(nil)
 	}
 }
 
@@ -179,7 +438,6 @@ func mtprotoNeedsRestart(old, newCfg *config.Config) bool {
 	if o.Enabled != n.Enabled ||
 		o.Port != n.Port ||
 		o.BindAddress != n.BindAddress ||
-		o.Secret != n.Secret ||
 		o.FakeSNI != n.FakeSNI ||
 		o.UpstreamMode != n.UpstreamMode ||
 		o.WSEndpointHost != n.WSEndpointHost ||
@@ -191,9 +449,35 @@ func mtprotoNeedsRestart(old, newCfg *config.Config) bool {
 	return old.Queue.Mark != newCfg.Queue.Mark
 }
 
+func mtprotoSecretsChanged(o, n config.MTProtoConfig) bool {
+	if o.Secret != n.Secret || len(o.Secrets) != len(n.Secrets) {
+		return true
+	}
+	for i := range o.Secrets {
+		if o.Secrets[i] != n.Secrets[i] {
+			return true
+		}
+	}
+	return false
+}
+
+func mtprotoConnMeta(user string) string {
+	u := strings.Map(func(r rune) rune {
+		if r == ',' || r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, user)
+	u = strings.TrimSpace(u)
+	if u == "" {
+		return "mtproto"
+	}
+	return "mtproto:" + u
+}
+
 func (s *Server) GetSecret() string {
-	if sec := s.secret.Load(); sec != nil {
-		return sec.Hex()
+	if ptr := s.secrets.Load(); ptr != nil && len(*ptr) > 0 {
+		return (*ptr)[0].Hex()
 	}
 	return ""
 }
@@ -217,7 +501,6 @@ func (s *Server) acceptLoop(ln net.Listener) {
 			continue
 		}
 
-		// match tg-ws-proxy: tune accepted client socket to 256KB buffers + nodelay
 		if tc, ok := conn.(*net.TCPConn); ok {
 			_ = tc.SetNoDelay(true)
 			_ = tc.SetReadBuffer(256 * 1024)
@@ -246,17 +529,18 @@ func (s *Server) handleConn(raw net.Conn) {
 		}
 	}()
 
-	secret := s.secret.Load()
-	if secret == nil {
+	secretsPtr := s.secrets.Load()
+	if secretsPtr == nil || len(*secretsPtr) == 0 {
 		return
 	}
+	secrets := *secretsPtr
 	cfg := s.cfg.Load()
 
 	if err := raw.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
 		return
 	}
 
-	tlsConn, err := AcceptFakeTLS(raw, secret)
+	tlsConn, secret, err := AcceptFakeTLSMulti(raw, secrets)
 	if err != nil {
 		log.Debugf("%s proxy fake-TLS failed from %s: %v", tag, clientAddr, err)
 		var vErr *FakeTLSVerifyError
@@ -265,14 +549,22 @@ func (s *Server) handleConn(raw net.Conn) {
 		}
 		return
 	}
-	log.Debugf("%s proxy fake-TLS handshake OK from %s", tag, clientAddr)
+	user := secret.Label()
+	log.Debugf("%s proxy fake-TLS handshake OK from %s (secret=%s)", tag, clientAddr, user)
+
+	untrack := s.trackConn(secret, raw)
+	defer untrack()
+	if !s.secretActive(secret) {
+		log.Infof("%s proxy secret %q revoked, dropping connection from %s", tag, user, clientAddr)
+		return
+	}
 
 	result, err := AcceptObfuscated(tlsConn, secret)
 	if err != nil {
 		log.Tracef("%s proxy obfuscated2 failed from %s: %v", tag, clientAddr, err)
 		return
 	}
-	log.Debugf("%s proxy client from %s wants DC %d proto=0x%08x", tag, clientAddr, result.DC, result.ProtoTag)
+	log.Debugf("%s proxy client [%s] from %s wants DC %d proto=0x%08x", tag, user, clientAddr, result.DC, result.ProtoTag)
 	_ = raw.SetDeadline(time.Time{})
 
 	dcConn, transport, err := DialObfuscatedDCWithPool(&cfg.System.MTProto, cfg.Queue, result.DC, result.ProtoTag, s.wsPool.Load(), id)
@@ -286,20 +578,33 @@ func (s *Server) handleConn(raw net.Conn) {
 	}
 	defer dcConn.Close()
 
-	log.Infof("%s proxy relay %s <-> DC%d via %s", tag, clientAddr, result.DC, transport)
+	log.Infof("%s proxy relay [%s] %s <-> DC%d via %s", tag, user, clientAddr, result.DC, transport)
+
+	dcAddr := fmt.Sprintf("DC%d", result.DC)
+	if ra := dcConn.RemoteAddr(); ra != nil {
+		dcAddr = ra.String()
+	}
+	log.LogConnectionStr("TCP", "", secret.Host, clientAddr, "", dcAddr, "", "", mtprotoConnMeta(user))
+
+	st := s.secretStat(secret)
+	st.active.Add(1)
+	st.total.Add(1)
+	defer st.active.Add(-1)
 
 	var splitter *msgSplitter
 	if _, ok := dcConn.Conn.(*wsConn); ok {
 		splitter = newMsgSplitter(result.ProtoTag)
 	}
-	s.relay(result.Conn, dcConn, splitter, fmt.Sprintf("%s %s<->DC%d via %s", tag, clientAddr, result.DC, transport))
+	up, down := s.relay(result.Conn, dcConn, splitter, fmt.Sprintf("%s [%s] %s<->DC%d via %s", tag, user, clientAddr, result.DC, transport))
+	st.up.Add(up)
+	st.down.Add(down)
 }
 
-func (s *Server) relay(client, dc io.ReadWriteCloser, splitter *msgSplitter, label string) {
-	relayConns(client, dc, splitter, label, &s.bufPool)
+func (s *Server) relay(client, dc io.ReadWriteCloser, splitter *msgSplitter, label string) (up, down int64) {
+	return relayConns(client, dc, splitter, label, &s.bufPool)
 }
 
-func relayConns(client, dc io.ReadWriteCloser, splitter *msgSplitter, label string, bufPool *sync.Pool) {
+func relayConns(client, dc io.ReadWriteCloser, splitter *msgSplitter, label string, bufPool *sync.Pool) (int64, int64) {
 	type relayEnd struct {
 		dir string
 		err error
@@ -381,4 +686,5 @@ func relayConns(client, dc io.ReadWriteCloser, splitter *msgSplitter, label stri
 		stale = " stale-upstream?"
 	}
 	log.Infof("%s closed: first=%s err=%v up=%d down=%d in %dms%s", label, first.dir, first.err, up, down, time.Since(start).Milliseconds(), stale)
+	return up, down
 }
