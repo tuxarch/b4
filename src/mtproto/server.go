@@ -20,6 +20,7 @@ import (
 const (
 	defaultMaxConnections = 2048
 	relayBufSize          = 65536
+	defaultIdleTimeout    = 300 * time.Second
 )
 
 func mtprotoMaxConnections(cfg *config.Config) int {
@@ -27,6 +28,28 @@ func mtprotoMaxConnections(cfg *config.Config) int {
 		return n
 	}
 	return defaultMaxConnections
+}
+
+func mtprotoTCPUserTimeout(cfg *config.Config) time.Duration {
+	switch n := cfg.System.MTProto.TCPUserTimeoutSec; {
+	case n < 0:
+		return 0
+	case n == 0:
+		return defaultUserTimeout
+	default:
+		return time.Duration(n) * time.Second
+	}
+}
+
+func mtprotoIdleTimeout(cfg *config.Config) time.Duration {
+	switch n := cfg.System.MTProto.IdleTimeoutSec; {
+	case n < 0:
+		return 0
+	case n == 0:
+		return defaultIdleTimeout
+	default:
+		return time.Duration(n) * time.Second
+	}
 }
 
 type Server struct {
@@ -93,9 +116,29 @@ func (s *Server) secretStat(sec *Secret) *secretStat {
 	return st
 }
 
+type connInfo struct {
+	secretID    string
+	secretName  string
+	clientIP    string
+	clientPort  int
+	connectedAt time.Time
+	dest        atomic.Pointer[string]
+	lastActive  atomic.Int64
+}
+
 type secretConnSet struct {
 	label string
-	conns map[net.Conn]struct{}
+	conns map[net.Conn]*connInfo
+}
+
+type SessionInfo struct {
+	ID          string
+	Name        string
+	ClientIP    string
+	ClientPort  int
+	Destination string
+	ConnectedAt time.Time
+	LastSeen    time.Time
 }
 
 func secretIdentity(sec *Secret) string {
@@ -106,20 +149,33 @@ func secretIdentity(sec *Secret) string {
 	return key + "|" + sec.Hex()
 }
 
-func (s *Server) trackConn(sec *Secret, c net.Conn) func() {
+func (s *Server) trackConn(sec *Secret, c net.Conn) (*connInfo, func()) {
 	id := secretIdentity(sec)
+	info := &connInfo{
+		secretID:    sec.ID,
+		secretName:  sec.Label(),
+		connectedAt: time.Now(),
+	}
+	if host, port, err := net.SplitHostPort(c.RemoteAddr().String()); err == nil {
+		info.clientIP = host
+		if p, err := strconv.Atoi(port); err == nil {
+			info.clientPort = p
+		}
+	}
+	info.lastActive.Store(info.connectedAt.UnixNano())
+
 	s.connsMu.Lock()
 	if s.conns == nil {
 		s.conns = make(map[string]*secretConnSet)
 	}
 	set := s.conns[id]
 	if set == nil {
-		set = &secretConnSet{label: sec.Label(), conns: make(map[net.Conn]struct{})}
+		set = &secretConnSet{label: sec.Label(), conns: make(map[net.Conn]*connInfo)}
 		s.conns[id] = set
 	}
-	set.conns[c] = struct{}{}
+	set.conns[c] = info
 	s.connsMu.Unlock()
-	return func() {
+	return info, func() {
 		s.connsMu.Lock()
 		if set := s.conns[id]; set != nil {
 			delete(set.conns, c)
@@ -129,6 +185,29 @@ func (s *Server) trackConn(sec *Secret, c net.Conn) func() {
 		}
 		s.connsMu.Unlock()
 	}
+}
+
+func (s *Server) Sessions() []SessionInfo {
+	s.connsMu.Lock()
+	defer s.connsMu.Unlock()
+	out := make([]SessionInfo, 0, len(s.conns))
+	for _, set := range s.conns {
+		for _, info := range set.conns {
+			si := SessionInfo{
+				ID:          info.secretID,
+				Name:        info.secretName,
+				ClientIP:    info.clientIP,
+				ClientPort:  info.clientPort,
+				ConnectedAt: info.connectedAt,
+				LastSeen:    time.Unix(0, info.lastActive.Load()),
+			}
+			if d := info.dest.Load(); d != nil {
+				si.Destination = *d
+			}
+			out = append(out, si)
+		}
+	}
+	return out
 }
 
 func (s *Server) secretActive(sec *Secret) bool {
@@ -292,7 +371,7 @@ func buildSecrets(cfg *config.Config) ([]*Secret, error) {
 		return nil, fmt.Errorf("MTProto: %d configured secret(s), none valid", invalid)
 	}
 
-	if len(mtCfg.Secrets) > 0 || strings.TrimSpace(mtCfg.Secret) != "" {
+	if len(mtCfg.Secrets) > 0 {
 		return nil, nil
 	}
 
@@ -307,7 +386,6 @@ func buildSecrets(cfg *config.Config) ([]*Secret, error) {
 	sec.ID = entry.ID
 	sec.Name = entry.Name
 	mtCfg.Secrets = append(mtCfg.Secrets, entry)
-	mtCfg.Secret = sec.Hex()
 	if cfg.ConfigPath != "" {
 		if err := cfg.SaveToFile(cfg.ConfigPath); err != nil {
 			log.Warnf("MTProto: failed to persist generated secret: %v", err)
@@ -450,7 +528,7 @@ func mtprotoNeedsRestart(old, newCfg *config.Config) bool {
 }
 
 func mtprotoSecretsChanged(o, n config.MTProtoConfig) bool {
-	if o.Secret != n.Secret || len(o.Secrets) != len(n.Secrets) {
+	if len(o.Secrets) != len(n.Secrets) {
 		return true
 	}
 	for i := range o.Secrets {
@@ -505,6 +583,7 @@ func (s *Server) acceptLoop(ln net.Listener) {
 			_ = tc.SetNoDelay(true)
 			_ = tc.SetReadBuffer(256 * 1024)
 			_ = tc.SetWriteBuffer(256 * 1024)
+			setTCPUserTimeout(tc, mtprotoTCPUserTimeout(s.cfg.Load()))
 		}
 
 		go func(c net.Conn) {
@@ -552,7 +631,7 @@ func (s *Server) handleConn(raw net.Conn) {
 	user := secret.Label()
 	log.Debugf("%s proxy fake-TLS handshake OK from %s (secret=%s)", tag, clientAddr, user)
 
-	untrack := s.trackConn(secret, raw)
+	info, untrack := s.trackConn(secret, raw)
 	defer untrack()
 	if !s.secretActive(secret) {
 		log.Infof("%s proxy secret %q revoked, dropping connection from %s", tag, user, clientAddr)
@@ -584,6 +663,7 @@ func (s *Server) handleConn(raw net.Conn) {
 	if ra := dcConn.RemoteAddr(); ra != nil {
 		dcAddr = ra.String()
 	}
+	info.dest.Store(&dcAddr)
 	log.LogConnectionStr("TCP", "", secret.Host, clientAddr, "", dcAddr, "", "", mtprotoConnMeta(user))
 
 	st := s.secretStat(secret)
@@ -595,16 +675,16 @@ func (s *Server) handleConn(raw net.Conn) {
 	if _, ok := dcConn.Conn.(*wsConn); ok {
 		splitter = newMsgSplitter(result.ProtoTag)
 	}
-	up, down := s.relay(result.Conn, dcConn, splitter, fmt.Sprintf("%s [%s] %s<->DC%d via %s", tag, user, clientAddr, result.DC, transport))
+	up, down := s.relay(result.Conn, dcConn, splitter, &info.lastActive, fmt.Sprintf("%s [%s] %s<->DC%d via %s", tag, user, clientAddr, result.DC, transport))
 	st.up.Add(up)
 	st.down.Add(down)
 }
 
-func (s *Server) relay(client, dc io.ReadWriteCloser, splitter *msgSplitter, label string) (up, down int64) {
-	return relayConns(client, dc, splitter, label, &s.bufPool)
+func (s *Server) relay(client, dc io.ReadWriteCloser, splitter *msgSplitter, lastActive *atomic.Int64, label string) (up, down int64) {
+	return relayConns(client, dc, splitter, label, &s.bufPool, mtprotoIdleTimeout(s.cfg.Load()), lastActive)
 }
 
-func relayConns(client, dc io.ReadWriteCloser, splitter *msgSplitter, label string, bufPool *sync.Pool) (int64, int64) {
+func relayConns(client, dc io.ReadWriteCloser, splitter *msgSplitter, label string, bufPool *sync.Pool, idle time.Duration, lastActive *atomic.Int64) (int64, int64) {
 	type relayEnd struct {
 		dir string
 		err error
@@ -612,6 +692,10 @@ func relayConns(client, dc io.ReadWriteCloser, splitter *msgSplitter, label stri
 	endCh := make(chan relayEnd, 2)
 	start := time.Now()
 	var upBytes, downBytes atomic.Int64
+	if lastActive == nil {
+		lastActive = new(atomic.Int64)
+	}
+	lastActive.Store(start.UnixNano())
 
 	cp := func(dst io.Writer, src io.Reader, dir string, counter *atomic.Int64) {
 		bufPtr := bufPool.Get().(*[]byte)
@@ -623,6 +707,7 @@ func relayConns(client, dc io.ReadWriteCloser, splitter *msgSplitter, label stri
 			var n int
 			n, err = src.Read(buf)
 			if n > 0 {
+				lastActive.Store(time.Now().UnixNano())
 				if _, werr := dst.Write(buf[:n]); werr != nil {
 					err = werr
 				} else {
@@ -648,6 +733,7 @@ func relayConns(client, dc io.ReadWriteCloser, splitter *msgSplitter, label stri
 			var n int
 			n, err = src.Read(buf)
 			if n > 0 {
+				lastActive.Store(time.Now().UnixNano())
 				for _, pkt := range splitter.split(buf[:n]) {
 					if _, werr := dst.Write(pkt); werr != nil {
 						err = werr
@@ -675,10 +761,39 @@ func relayConns(client, dc io.ReadWriteCloser, splitter *msgSplitter, label stri
 	}
 	go cp(client, dc, "DC->client", &downBytes)
 
+	done := make(chan struct{})
+	if idle > 0 {
+		go func() {
+			interval := idle / 4
+			if interval < 100*time.Millisecond {
+				interval = 100 * time.Millisecond
+			}
+			if interval > 15*time.Second {
+				interval = 15 * time.Second
+			}
+			t := time.NewTicker(interval)
+			defer t.Stop()
+			for {
+				select {
+				case <-done:
+					return
+				case <-t.C:
+					if time.Since(time.Unix(0, lastActive.Load())) >= idle {
+						log.Infof("%s idle for %s, reaping", label, idle)
+						_ = client.Close()
+						_ = dc.Close()
+						return
+					}
+				}
+			}
+		}()
+	}
+
 	first := <-endCh
 	_ = client.Close()
 	_ = dc.Close()
 	<-endCh
+	close(done)
 
 	up, down := upBytes.Load(), downBytes.Load()
 	stale := ""

@@ -91,6 +91,15 @@ func TestLoadWithMigration(t *testing.T) {
 		if len(cfg.Sets) > 0 && !cfg.Sets[0].Enabled {
 			t.Error("migration should set Enabled=true")
 		}
+
+		backupPath := path + ".v0.bak"
+		backup, err := os.ReadFile(backupPath)
+		if err != nil {
+			t.Fatalf("expected pre-migration backup at %s: %v", backupPath, err)
+		}
+		if string(backup) != v0Json {
+			t.Error("backup should contain the original pre-migration config")
+		}
 	})
 
 	t.Run("current version skips migration", func(t *testing.T) {
@@ -145,17 +154,14 @@ func TestDiscoverConfigPath(t *testing.T) {
 }
 
 func TestApplyMigrations(t *testing.T) {
-	t.Run("v0 to v1 sets enabled", func(t *testing.T) {
+	t.Run("versions without a registered migration are skipped", func(t *testing.T) {
 		cfg := NewConfig()
-		set := NewSetConfig()
-		set.Enabled = false
-		cfg.Sets = []*SetConfig{&set}
 
 		if err := cfg.applyMigrations(0, map[string]interface{}{}); err != nil {
 			t.Fatalf("migration failed: %v", err)
 		}
-		if !cfg.Sets[0].Enabled {
-			t.Error("v0->v1 should set Enabled=true")
+		if cfg.Version != CurrentConfigVersion {
+			t.Errorf("expected version %d, got %d", CurrentConfigVersion, cfg.Version)
 		}
 	})
 
@@ -192,5 +198,50 @@ func TestApplyMigrations(t *testing.T) {
 				}
 			})
 		}
+	})
+
+	t.Run("v49 to v50 moves legacy mtproto secret into secrets list", func(t *testing.T) {
+		t.Run("legacy secret migrated from raw", func(t *testing.T) {
+			cfg := NewConfig()
+			cfg.System.MTProto.Secrets = nil
+			raw := map[string]interface{}{"system": map[string]interface{}{"mtproto": map[string]interface{}{"secret": "ee-legacy-secret"}}}
+			if err := migrateV49to50(&cfg, raw); err != nil {
+				t.Fatalf("migration failed: %v", err)
+			}
+			if len(cfg.System.MTProto.Secrets) != 1 {
+				t.Fatalf("want 1 migrated secret, got %d", len(cfg.System.MTProto.Secrets))
+			}
+			s := cfg.System.MTProto.Secrets[0]
+			if s.Secret != "ee-legacy-secret" {
+				t.Errorf("secret: want %q, got %q", "ee-legacy-secret", s.Secret)
+			}
+			if !s.Enabled {
+				t.Error("migrated secret should be enabled")
+			}
+			if s.ID == "" {
+				t.Error("migrated secret should get an ID")
+			}
+		})
+		t.Run("existing secrets are not overwritten", func(t *testing.T) {
+			cfg := NewConfig()
+			cfg.System.MTProto.Secrets = []MTProtoSecret{{ID: "keep", Secret: "ee-existing", Enabled: true}}
+			raw := map[string]interface{}{"system": map[string]interface{}{"mtproto": map[string]interface{}{"secret": "ee-legacy-secret"}}}
+			if err := migrateV49to50(&cfg, raw); err != nil {
+				t.Fatalf("migration failed: %v", err)
+			}
+			if len(cfg.System.MTProto.Secrets) != 1 || cfg.System.MTProto.Secrets[0].Secret != "ee-existing" {
+				t.Errorf("existing secrets should be untouched, got %+v", cfg.System.MTProto.Secrets)
+			}
+		})
+		t.Run("no legacy secret is a no-op", func(t *testing.T) {
+			cfg := NewConfig()
+			cfg.System.MTProto.Secrets = nil
+			if err := migrateV49to50(&cfg, map[string]interface{}{}); err != nil {
+				t.Fatalf("migration failed: %v", err)
+			}
+			if len(cfg.System.MTProto.Secrets) != 0 {
+				t.Errorf("want 0 secrets, got %d", len(cfg.System.MTProto.Secrets))
+			}
+		})
 	})
 }
