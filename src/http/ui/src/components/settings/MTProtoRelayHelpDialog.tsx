@@ -26,6 +26,7 @@ interface RefreshOk {
   ok: true;
   count: number;
   dcs: Record<string, string>;
+  direct?: Record<string, string>;
 }
 interface RefreshErr {
   ok: false;
@@ -64,11 +65,14 @@ export const MTProtoRelayHelpDialog = ({
 
   const mappings = useMemo(() => {
     if (!relayInfo || !refreshResult?.ok) return [];
-    return Object.entries(refreshResult.dcs)
+    const addrs = refreshResult.direct ?? refreshResult.dcs;
+    return Object.entries(addrs)
       .map(([id, addr]) => {
         const absDc = Math.abs(Number(id));
-        return { dc: absDc, addr, port: relayInfo.basePort + absDc - 1 };
+        return { dc: absDc, addr };
       })
+      .filter((m) => m.dc !== 203)
+      .map((m) => ({ ...m, port: relayInfo.basePort + m.dc - 1 }))
       .sort((a, b) => a.dc - b.dc);
   }, [relayInfo, refreshResult]);
 

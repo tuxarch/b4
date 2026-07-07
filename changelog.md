@@ -1,5 +1,9 @@
 # B4 - Bye Bye Big Bro
 
+## [1.73.1] - 2026-07-07
+
+- FIXED: **The DC Relay socat helper generated commands that pointed at the wrong Telegram servers** - the "?" dialog next to the DC Relay field built its `socat` commands from Telegram's published proxy list, whose addresses are internal middle-proxy backends on port 8888. Those backends close the socket right after the handshake, so a relay set up exactly as the helper showed failed every connection with "dropped after handshake". The helper now forwards to the public data-center addresses b4 dials over direct TCP, and no longer emits a dead command for the media DC 203, which reuses DC 2's relay port.
+
 ## [1.73.0] - 2026-07-05
 
 - FIXED: **A phone that dropped off mobile data could leave a Telegram proxy connection stuck** - when a mobile client backgrounded Telegram or lost signal, its connection frequently died without a clean close, yet b4 held the half-dead session and its link out to Telegram open for many minutes, in some cases until the app was reopened, so returning to Telegram could mean waiting on a dead socket instead of a clean reconnect.

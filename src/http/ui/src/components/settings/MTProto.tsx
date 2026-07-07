@@ -74,7 +74,12 @@ export const MTProtoSettings = ({ config, onChange }: MTProtoSettingsProps) => {
   const { t } = useTranslation();
   const [refreshing, setRefreshing] = useState(false);
   const [refreshResult, setRefreshResult] = useState<
-    | { ok: true; count: number; dcs: Record<string, string> }
+    | {
+        ok: true;
+        count: number;
+        dcs: Record<string, string>;
+        direct?: Record<string, string>;
+      }
     | { ok: false; error: string }
     | null
   >(null);
@@ -154,10 +159,16 @@ export const MTProtoSettings = ({ config, onChange }: MTProtoSettingsProps) => {
         success: boolean;
         count?: number;
         dcs?: Record<string, string>;
+        direct?: Record<string, string>;
         error?: string;
       };
       if (data.success && typeof data.count === "number" && data.dcs) {
-        setRefreshResult({ ok: true, count: data.count, dcs: data.dcs });
+        setRefreshResult({
+          ok: true,
+          count: data.count,
+          dcs: data.dcs,
+          direct: data.direct,
+        });
       } else {
         setRefreshResult({ ok: false, error: data.error || "unknown error" });
       }

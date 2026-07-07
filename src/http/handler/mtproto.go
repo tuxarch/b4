@@ -234,6 +234,7 @@ func (api *API) handleMTProtoRefreshDCs(w http.ResponseWriter, r *http.Request) 
 		"success": true,
 		"count":   len(snap),
 		"dcs":     snap,
+		"direct":  mtproto.DirectAddresses(),
 	})
 }
 
